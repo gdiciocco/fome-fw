@@ -342,6 +342,18 @@ static void updateRawSensors() {
 	engine->outputChannels.luaGauges[0] = Sensor::getOrZero(SensorType::LuaGauge1);
 	engine->outputChannels.luaGauges[1] = Sensor::getOrZero(SensorType::LuaGauge2);
 
+#ifdef MODULE_SHOCK_PRELOAD
+	auto& shockPreload = engine->module<ShockPreload>();
+	engine->outputChannels.shockPreloadOnline = shockPreload->isOnline();
+	engine->outputChannels.shockPreloadAtPreset = shockPreload->isAtSavedPreset();
+	engine->outputChannels.shockPreloadPosition = shockPreload->getPosition();
+	engine->outputChannels.shockPreloadTarget = shockPreload->getControllerTarget();
+	engine->outputChannels.shockPreloadState = shockPreload->getState();
+	engine->outputChannels.shockPreloadAlarms = shockPreload->getAlarms();
+	engine->outputChannels.shockPreloadCurrent = shockPreload->getCurrent();
+	engine->outputChannels.shockPreloadPreset = shockPreload->getSelectedPreset();
+#endif
+
 	for (size_t i = 0; i < efi::size(engine->outputChannels.rawAnalogInput); i++) {
 		engine->outputChannels.rawAnalogInput[i] =
 				Sensor::getRaw(static_cast<SensorType>(static_cast<size_t>(SensorType::AuxAnalog1) + i));

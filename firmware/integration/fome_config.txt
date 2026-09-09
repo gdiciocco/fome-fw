@@ -686,7 +686,7 @@ bit is_enabled_spi_2
 	bit is_enabled_spi_3
 	bit isSdCardEnabled;enable sd/disable sd
 	bit rusefiVerbose29b,"29 bit","11 bit";Use 11 bit (standard) or 29 bit (extended) IDs for FOME verbose CAN format.
-	bit unused580b5
+	bit enableShockPreload;Enable the Caponord electronic shock preload controller on primary CAN (standard IDs 0x720-0x722).
 	bit useStepperIdle;This setting should only be used if you have a stepper motor idle valve and a stepper motor driver installed.
 	
 	bit enabledStep1Limiter
@@ -1488,6 +1488,8 @@ pin_input_mode_e[LUA_DIGITAL_INPUT_COUNT iterate] luaDigitalInputPinModes;
 	torque_limiter_cfg[TORQUE_LIMITER_COUNT iterate] torqueLimiters;
 
 	brain_input_pin_e hellaOpsTInput;Hella OPS+T combined oil pressure and temperature sensor input. Existing oil pressure and temperature providers retain priority for their registered channel.
+
+	uint8_t shockPreloadCommandTarget;Target position sent by the Shock Preload Set Target command.;"%", 1, 0, 0, 100, 0
 
 ! end of engine_configuration_s
 end_struct

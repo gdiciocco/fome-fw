@@ -455,6 +455,12 @@ void executeTSCommand(uint16_t subsystem, uint16_t index) {
 			}
 			break;
 
+		case TS_SHOCK_PRELOAD_CATEGORY:
+#ifdef MODULE_SHOCK_PRELOAD
+			engine->module<ShockPreload>()->handleTsCommand(index);
+#endif
+			break;
+
 		case TS_X14:
 			handleCommandX14(index);
 			break;
