@@ -31,6 +31,7 @@ or
 ## Unreleased
 
 ### Added
+ - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
  - SD card logs now contain every output channel (full parity with the TunerStudio log), rather than only a curated subset - previously-missing data like idle, throttle, wideband and wall-fuel state is now logged
