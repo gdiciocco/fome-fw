@@ -16,7 +16,7 @@ public:
 
 	CanListener* processFrame(CanBusIndex busIndex, const CANRxFrame& frame, efitick_t nowNt) {
 		if (acceptFrame(busIndex, frame)) {
-			decodeFrame(frame, nowNt);
+			decodeFrame(busIndex, frame, nowNt);
 		}
 
 		return m_next;
@@ -41,6 +41,11 @@ public:
 	}
 
 protected:
+	// Bus-aware override for listeners whose protocol endpoint can move between
+	// CAN controllers. Existing listeners remain source compatible.
+	virtual void decodeFrame(CanBusIndex, const CANRxFrame& frame, efitick_t nowNt) {
+		decodeFrame(frame, nowNt);
+	}
 	virtual void decodeFrame(const CANRxFrame& frame, efitick_t nowNt) = 0;
 
 private:

@@ -103,6 +103,7 @@ TESTS_SRC_CPP = \
 	tests/test_can_rx.cpp \
 	tests/test_can_serial.cpp \
 	tests/test_can_wideband.cpp \
+	tests/test_emp_pump.cpp \
 	tests/test_shock_preload.cpp \
 	tests/test_hellen_board_id.cpp \
 	tests/sensor/test_frequency_sensor.cpp \

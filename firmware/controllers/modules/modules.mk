@@ -1,4 +1,5 @@
 include $(PROJECT_DIR)/controllers/modules/fan/fan.mk
+include $(PROJECT_DIR)/controllers/modules/emp_pump/emp_pump.mk
 include $(PROJECT_DIR)/controllers/modules/fuel_pump/fuel_pump.mk
 include $(PROJECT_DIR)/controllers/modules/gear_detector/gear_detector.mk
 include $(PROJECT_DIR)/controllers/modules/shock_preload/shock_preload.mk

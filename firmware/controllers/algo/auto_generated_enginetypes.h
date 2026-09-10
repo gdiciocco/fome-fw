@@ -104,6 +104,15 @@ constexpr inline const char* getCommand_x14_e(command_x14_e value) {
 	}
 	return "unknown";
 }
+constexpr inline const char* getEmp_pump_ts_command_e(emp_pump_ts_command_e value) {
+	switch (value) {
+		case EMP_PUMP_SERVICE_START:
+			return "EMP_PUMP_SERVICE_START";
+		case EMP_PUMP_SERVICE_STOP:
+			return "EMP_PUMP_SERVICE_STOP";
+	}
+	return "unknown";
+}
 constexpr inline const char* getEngine_type_e(engine_type_e value) {
 	switch (value) {
 		case engine_type_e::BMW_M73_M:
@@ -309,6 +318,49 @@ constexpr inline const char* getEngine_type_e(engine_type_e value) {
 	}
 	return "unknown";
 }
+constexpr inline const char* getShock_preload_ts_command_e(shock_preload_ts_command_e value) {
+	switch (value) {
+		case SHOCK_PRELOAD_CALIBRATE:
+			return "SHOCK_PRELOAD_CALIBRATE";
+		case SHOCK_PRELOAD_CLEAR_ALARMS:
+			return "SHOCK_PRELOAD_CLEAR_ALARMS";
+		case SHOCK_PRELOAD_LOAD_SLOT_0:
+			return "SHOCK_PRELOAD_LOAD_SLOT_0";
+		case SHOCK_PRELOAD_LOAD_SLOT_1:
+			return "SHOCK_PRELOAD_LOAD_SLOT_1";
+		case SHOCK_PRELOAD_LOAD_SLOT_2:
+			return "SHOCK_PRELOAD_LOAD_SLOT_2";
+		case SHOCK_PRELOAD_LOAD_SLOT_3:
+			return "SHOCK_PRELOAD_LOAD_SLOT_3";
+		case SHOCK_PRELOAD_LOAD_SLOT_4:
+			return "SHOCK_PRELOAD_LOAD_SLOT_4";
+		case SHOCK_PRELOAD_MOVE_DOWN_2:
+			return "SHOCK_PRELOAD_MOVE_DOWN_2";
+		case SHOCK_PRELOAD_MOVE_UP_2:
+			return "SHOCK_PRELOAD_MOVE_UP_2";
+		case SHOCK_PRELOAD_REQUEST_STATUS:
+			return "SHOCK_PRELOAD_REQUEST_STATUS";
+		case SHOCK_PRELOAD_SAVE_SLOT_0:
+			return "SHOCK_PRELOAD_SAVE_SLOT_0";
+		case SHOCK_PRELOAD_SAVE_SLOT_1:
+			return "SHOCK_PRELOAD_SAVE_SLOT_1";
+		case SHOCK_PRELOAD_SAVE_SLOT_2:
+			return "SHOCK_PRELOAD_SAVE_SLOT_2";
+		case SHOCK_PRELOAD_SAVE_SLOT_3:
+			return "SHOCK_PRELOAD_SAVE_SLOT_3";
+		case SHOCK_PRELOAD_SAVE_SLOT_4:
+			return "SHOCK_PRELOAD_SAVE_SLOT_4";
+		case SHOCK_PRELOAD_SET_REFERENCE_0:
+			return "SHOCK_PRELOAD_SET_REFERENCE_0";
+		case SHOCK_PRELOAD_SET_REFERENCE_50:
+			return "SHOCK_PRELOAD_SET_REFERENCE_50";
+		case SHOCK_PRELOAD_SET_TARGET:
+			return "SHOCK_PRELOAD_SET_TARGET";
+		case SHOCK_PRELOAD_STOP:
+			return "SHOCK_PRELOAD_STOP";
+	}
+	return "unknown";
+}
 constexpr inline const char* getTrigger_type_e(trigger_type_e value) {
 	switch (value) {
 		case trigger_type_e::TT_12_TOOTH_CRANK:
@@ -480,6 +532,8 @@ constexpr inline const char* getTs_command_e(ts_command_e value) {
 			return "TS_BENCH_CATEGORY";
 		case TS_CLEAR_WARNINGS:
 			return "TS_CLEAR_WARNINGS";
+		case TS_EMP_PUMP_CATEGORY:
+			return "TS_EMP_PUMP_CATEGORY";
 		case TS_IGNITION_CATEGORY:
 			return "TS_IGNITION_CATEGORY";
 		case TS_INJECTOR_CATEGORY:
@@ -490,6 +544,8 @@ constexpr inline const char* getTs_command_e(ts_command_e value) {
 			return "TS_SET_DEFAULT_ENGINE";
 		case TS_SET_ENGINE_TYPE:
 			return "TS_SET_ENGINE_TYPE";
+		case TS_SHOCK_PRELOAD_CATEGORY:
+			return "TS_SHOCK_PRELOAD_CATEGORY";
 		case TS_UNUSED_0:
 			return "TS_UNUSED_0";
 		case TS_UNUSED_1:

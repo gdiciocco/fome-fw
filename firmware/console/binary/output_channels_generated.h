@@ -660,8 +660,196 @@ struct output_channels_s {
 	int8_t cylinderRpmDelta[12];
 	// offset 530
 	uint8_t alignmentFill_at_530[2];
+	// Shock preload: Online
+	// offset 532 bit 0
+	bool shockPreloadOnline : 1 {};
+	// Shock preload: At saved preset
+	// offset 532 bit 1
+	bool shockPreloadAtPreset : 1 {};
+	// offset 532 bit 2
+	bool unusedBit_532_2 : 1 {};
+	// offset 532 bit 3
+	bool unusedBit_532_3 : 1 {};
+	// offset 532 bit 4
+	bool unusedBit_532_4 : 1 {};
+	// offset 532 bit 5
+	bool unusedBit_532_5 : 1 {};
+	// offset 532 bit 6
+	bool unusedBit_532_6 : 1 {};
+	// offset 532 bit 7
+	bool unusedBit_532_7 : 1 {};
+	// offset 532 bit 8
+	bool unusedBit_532_8 : 1 {};
+	// offset 532 bit 9
+	bool unusedBit_532_9 : 1 {};
+	// offset 532 bit 10
+	bool unusedBit_532_10 : 1 {};
+	// offset 532 bit 11
+	bool unusedBit_532_11 : 1 {};
+	// offset 532 bit 12
+	bool unusedBit_532_12 : 1 {};
+	// offset 532 bit 13
+	bool unusedBit_532_13 : 1 {};
+	// offset 532 bit 14
+	bool unusedBit_532_14 : 1 {};
+	// offset 532 bit 15
+	bool unusedBit_532_15 : 1 {};
+	// offset 532 bit 16
+	bool unusedBit_532_16 : 1 {};
+	// offset 532 bit 17
+	bool unusedBit_532_17 : 1 {};
+	// offset 532 bit 18
+	bool unusedBit_532_18 : 1 {};
+	// offset 532 bit 19
+	bool unusedBit_532_19 : 1 {};
+	// offset 532 bit 20
+	bool unusedBit_532_20 : 1 {};
+	// offset 532 bit 21
+	bool unusedBit_532_21 : 1 {};
+	// offset 532 bit 22
+	bool unusedBit_532_22 : 1 {};
+	// offset 532 bit 23
+	bool unusedBit_532_23 : 1 {};
+	// offset 532 bit 24
+	bool unusedBit_532_24 : 1 {};
+	// offset 532 bit 25
+	bool unusedBit_532_25 : 1 {};
+	// offset 532 bit 26
+	bool unusedBit_532_26 : 1 {};
+	// offset 532 bit 27
+	bool unusedBit_532_27 : 1 {};
+	// offset 532 bit 28
+	bool unusedBit_532_28 : 1 {};
+	// offset 532 bit 29
+	bool unusedBit_532_29 : 1 {};
+	// offset 532 bit 30
+	bool unusedBit_532_30 : 1 {};
+	// offset 532 bit 31
+	bool unusedBit_532_31 : 1 {};
+	// Shock preload: Position
+	// %
+	// offset 536
+	uint8_t shockPreloadPosition = (uint8_t)0;
+	// Shock preload: Controller target
+	// %
+	// offset 537
+	uint8_t shockPreloadTarget = (uint8_t)0;
+	// Shock preload: State
+	// offset 538
+	uint8_t shockPreloadState = (uint8_t)0;
+	// offset 539
+	uint8_t alignmentFill_at_539[1];
+	// Shock preload: Alarms
+	// offset 540
+	uint16_t shockPreloadAlarms = (uint16_t)0;
+	// Shock preload: Current
+	// raw
+	// offset 542
+	uint16_t shockPreloadCurrent = (uint16_t)0;
+	// Shock preload: Selected preset (255 = invalid)
+	// offset 544
+	uint8_t shockPreloadPreset = (uint8_t)0;
+	// EMP pump: State
+	// offset 545
+	uint8_t empPumpState = (uint8_t)0;
+	// EMP pump: Thermal state
+	// offset 546
+	uint8_t empPumpThermalState = (uint8_t)0;
+	// offset 547
+	uint8_t alignmentFill_at_547[1];
+	// EMP pump: Faults
+	// offset 548
+	uint16_t empPumpFaults = (uint16_t)0;
+	// EMP pump: Capabilities
+	// offset 550
+	uint8_t empPumpCapabilities = (uint8_t)0;
+	// offset 551
+	uint8_t alignmentFill_at_551[1];
+	// EMP pump: Commanded speed
+	// RPM
+	// offset 552
+	uint16_t empPumpTargetRpm = (uint16_t)0;
+	// EMP pump: Actual speed
+	// RPM
+	// offset 554
+	uint16_t empPumpActualRpm = (uint16_t)0;
+	// EMP pump: Actual speed raw percent
+	// %
+	// offset 556
+	uint8_t empPumpActualPercent = (uint8_t)0;
+	// EMP pump: Controller status
+	// offset 557
+	uint8_t empPumpControllerStatus = (uint8_t)0;
+	// EMP pump: Status summary
+	// offset 558
+	uint8_t empPumpStatusSummary = (uint8_t)0;
+	// EMP pump: HVIL state
+	// offset 559
+	uint8_t empPumpHvilState = (uint8_t)0;
+	// EMP pump: Voltage raw
+	// raw
+	// offset 560
+	uint16_t empPumpVoltageRaw = (uint16_t)0;
+	// EMP pump: Current raw
+	// raw
+	// offset 562
+	uint16_t empPumpCurrentRaw = (uint16_t)0;
+	// EMP pump: Power
+	// W
+	// offset 564
+	uint16_t empPumpPowerWatts = (uint16_t)0;
+	// EMP pump: Main status age
+	// ms
+	// offset 566
+	uint16_t empPumpStatusAgeMs = (uint16_t)0;
+	// EMP pump: After-run remaining
+	// s
+	// offset 568
+	uint16_t empPumpAfterRunRemaining = (uint16_t)0;
+	// EMP pump: Last command control byte
+	// offset 570
+	uint8_t empPumpLastControl = (uint8_t)0;
+	// EMP pump: Control flags
+	// offset 571
+	uint8_t empPumpControlFlags = (uint8_t)0;
+	// EMP pump: Filtered IAT
+	// C
+	// offset 572
+	int16_t empPumpFilteredIat = (int16_t)0;
+	// EMP pump: CLT target error
+	// C
+	// offset 574
+	int8_t empPumpTemperatureError = (int8_t)0;
+	// offset 575
+	uint8_t alignmentFill_at_575[1];
+	// EMP pump: CLT slope
+	// C/min
+	// offset 576
+	int16_t empPumpCoolantSlope = (int16_t)0;
+	// EMP pump: Minimum flow
+	// RPM
+	// offset 578
+	uint16_t empPumpMinimumFlow = (uint16_t)0;
+	// EMP pump: Feed-forward
+	// RPM
+	// offset 580
+	int16_t empPumpFeedForward = (int16_t)0;
+	// EMP pump: PI correction
+	// RPM
+	// offset 582
+	int16_t empPumpPiCorrection = (int16_t)0;
+	// EMP pump: Cooling demand
+	// %
+	// offset 584
+	uint8_t empPumpCoolingDemand = (uint8_t)0;
+	// offset 585
+	uint8_t alignmentFill_at_585[1];
+	// EMP pump: Saturation time
+	// s
+	// offset 586
+	uint16_t empPumpSaturationSeconds = (uint16_t)0;
 };
-static_assert(sizeof(output_channels_s) == 532);
+static_assert(sizeof(output_channels_s) == 588);
 static_assert(offsetof(output_channels_s, RPMValue) == 4);
 static_assert(offsetof(output_channels_s, rpmAcceleration) == 6);
 static_assert(offsetof(output_channels_s, coolant) == 8);
@@ -818,3 +1006,34 @@ static_assert(offsetof(output_channels_s, dwellAccuracyRatio) == 490);
 static_assert(offsetof(output_channels_s, mafMeasured_preFilter) == 492);
 static_assert(offsetof(output_channels_s, cylinderRpm) == 494);
 static_assert(offsetof(output_channels_s, cylinderRpmDelta) == 518);
+static_assert(offsetof(output_channels_s, shockPreloadPosition) == 536);
+static_assert(offsetof(output_channels_s, shockPreloadTarget) == 537);
+static_assert(offsetof(output_channels_s, shockPreloadState) == 538);
+static_assert(offsetof(output_channels_s, shockPreloadAlarms) == 540);
+static_assert(offsetof(output_channels_s, shockPreloadCurrent) == 542);
+static_assert(offsetof(output_channels_s, shockPreloadPreset) == 544);
+static_assert(offsetof(output_channels_s, empPumpState) == 545);
+static_assert(offsetof(output_channels_s, empPumpThermalState) == 546);
+static_assert(offsetof(output_channels_s, empPumpFaults) == 548);
+static_assert(offsetof(output_channels_s, empPumpCapabilities) == 550);
+static_assert(offsetof(output_channels_s, empPumpTargetRpm) == 552);
+static_assert(offsetof(output_channels_s, empPumpActualRpm) == 554);
+static_assert(offsetof(output_channels_s, empPumpActualPercent) == 556);
+static_assert(offsetof(output_channels_s, empPumpControllerStatus) == 557);
+static_assert(offsetof(output_channels_s, empPumpStatusSummary) == 558);
+static_assert(offsetof(output_channels_s, empPumpHvilState) == 559);
+static_assert(offsetof(output_channels_s, empPumpVoltageRaw) == 560);
+static_assert(offsetof(output_channels_s, empPumpCurrentRaw) == 562);
+static_assert(offsetof(output_channels_s, empPumpPowerWatts) == 564);
+static_assert(offsetof(output_channels_s, empPumpStatusAgeMs) == 566);
+static_assert(offsetof(output_channels_s, empPumpAfterRunRemaining) == 568);
+static_assert(offsetof(output_channels_s, empPumpLastControl) == 570);
+static_assert(offsetof(output_channels_s, empPumpControlFlags) == 571);
+static_assert(offsetof(output_channels_s, empPumpFilteredIat) == 572);
+static_assert(offsetof(output_channels_s, empPumpTemperatureError) == 574);
+static_assert(offsetof(output_channels_s, empPumpCoolantSlope) == 576);
+static_assert(offsetof(output_channels_s, empPumpMinimumFlow) == 578);
+static_assert(offsetof(output_channels_s, empPumpFeedForward) == 580);
+static_assert(offsetof(output_channels_s, empPumpPiCorrection) == 582);
+static_assert(offsetof(output_channels_s, empPumpCoolingDemand) == 584);
+static_assert(offsetof(output_channels_s, empPumpSaturationSeconds) == 586);

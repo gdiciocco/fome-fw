@@ -461,6 +461,18 @@ void executeTSCommand(uint16_t subsystem, uint16_t index) {
 #endif
 			break;
 
+		case TS_EMP_PUMP_CATEGORY:
+#ifdef MODULE_EMP_PUMP
+			// The EMP module itself rejects a start while the engine is running
+			// unless the explicit configuration override is enabled.
+			if (index == EMP_PUMP_SERVICE_START) {
+				engine->module<EmpPump>()->handleServiceCommand(EmpPumpServiceCommand::Start);
+			} else if (index == EMP_PUMP_SERVICE_STOP) {
+				engine->module<EmpPump>()->handleServiceCommand(EmpPumpServiceCommand::Stop);
+			}
+#endif
+			break;
+
 		case TS_X14:
 			handleCommandX14(index);
 			break;
