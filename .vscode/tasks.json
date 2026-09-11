@@ -4,6 +4,87 @@
 	"version": "2.0.0",
 	"tasks": [
 		{
+			"label": "Core8: Build firmware",
+			"detail": "Compila bootloader e firmware Core8 e genera l'INI TunerStudio.",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
+				"build"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$gcc",
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "Core8: Flash firmware (USB DFU)",
+			"detail": "Scrive firmware/deliver/fome.bin, verifica e avvia la Core8.",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
+				"flash"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "Core8: Build + Flash USB DFU",
+			"detail": "Esegue in sequenza compilazione, flash, verifica e avvio della Core8.",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
+				"all"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$gcc",
+			"group": {
+				"kind": "build",
+				"isDefault": true
+			},
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "Core8: Show TunerStudio INI",
+			"detail": "Mostra i percorsi Linux e Windows e la firma dell'INI Core8.",
+			"type": "shell",
+			"command": "bash",
+			"args": [
+				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
+				"ini"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": [],
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
 			"label": "Clean Firmware",
 			"type": "shell",
 			"command": "make clean",

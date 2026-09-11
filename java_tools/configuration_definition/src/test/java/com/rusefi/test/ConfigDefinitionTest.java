@@ -2,6 +2,8 @@ package com.rusefi.test;
 
 import com.rusefi.EnumsReader;
 import com.rusefi.VariableRegistry;
+import com.rusefi.newparse.ParseState;
+import com.rusefi.trigger.TriggerWheelTSLogic;
 import org.junit.Test;
 
 import java.io.File;
@@ -29,5 +31,16 @@ public class ConfigDefinitionTest {
         System.out.println(sb);
         assertNotNull(sb);
         assertTrue("Seems too long" + sb, sb.length() < 100000);
+    }
+
+    @Test
+    public void triggerTsDefinitionsAreAvailableToNewParser() {
+        ParseState parseState = new ParseState();
+
+        new TriggerWheelTSLogic().execute("../../unit_tests", new VariableRegistry(), parseState);
+
+        assertNotNull(parseState.findDefinition("TRIGGER_TYPE_WITHOUT_KNOWN_LOCATION"));
+        assertNotNull(parseState.findDefinition("TRIGGER_TYPE_WITH_SECOND_WHEEL"));
+        assertNotNull(parseState.findDefinition("TRIGGER_CRANK_BASED"));
     }
 }

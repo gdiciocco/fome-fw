@@ -1,4 +1,5 @@
 .dep*
+.gradle/
 build/
 build_kinetis/
 pinouts
