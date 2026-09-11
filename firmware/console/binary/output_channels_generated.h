@@ -666,16 +666,21 @@ struct output_channels_s {
 	// Shock preload: At saved preset
 	// offset 532 bit 1
 	bool shockPreloadAtPreset : 1 {};
+	// Shock preload: Preset 0 selected and reached
 	// offset 532 bit 2
-	bool unusedBit_532_2 : 1 {};
+	bool shockPreloadPreset0Active : 1 {};
+	// Shock preload: Preset 1 selected and reached
 	// offset 532 bit 3
-	bool unusedBit_532_3 : 1 {};
+	bool shockPreloadPreset1Active : 1 {};
+	// Shock preload: Preset 2 selected and reached
 	// offset 532 bit 4
-	bool unusedBit_532_4 : 1 {};
+	bool shockPreloadPreset2Active : 1 {};
+	// Shock preload: Preset 3 selected and reached
 	// offset 532 bit 5
-	bool unusedBit_532_5 : 1 {};
+	bool shockPreloadPreset3Active : 1 {};
+	// Shock preload: Preset 4 selected and reached
 	// offset 532 bit 6
-	bool unusedBit_532_6 : 1 {};
+	bool shockPreloadPreset4Active : 1 {};
 	// offset 532 bit 7
 	bool unusedBit_532_7 : 1 {};
 	// offset 532 bit 8

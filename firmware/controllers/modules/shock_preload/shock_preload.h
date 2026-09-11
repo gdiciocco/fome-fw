@@ -28,6 +28,7 @@ public:
 	uint16_t getCurrent() const { return m_current; }
 	uint8_t getSelectedPreset() const { return m_selectedPreset; }
 	bool isAtSavedPreset() const;
+	bool isPresetActive(uint8_t preset) const;
 	bool isOnline() const;
 
 private:
@@ -47,6 +48,7 @@ private:
 	static constexpr uint8_t CommandCalibrate = 0x12;
 
 	bool isEnabled() const;
+	bool isPositionAtPreset(size_t preset) const;
 	void sendSimpleCommand(uint8_t command);
 	void sendValueCommand(uint8_t command, uint16_t value);
 	void sendRelativeCommand(int16_t value);

@@ -67,6 +67,8 @@ TEST(ShockPreload, DecodesStatusAndAlarmFrames) {
 	EXPECT_EQ(2, dut.getSelectedPreset());
 	EXPECT_EQ(43, dut.getPosition());
 	EXPECT_TRUE(dut.isAtSavedPreset());
+	EXPECT_TRUE(dut.isPresetActive(2));
+	EXPECT_FALSE(dut.isPresetActive(1));
 
 	CANRxFrame alarm = {};
 	alarm.IDE = false;
@@ -85,10 +87,12 @@ TEST(ShockPreload, DecodesStatusAndAlarmFrames) {
 	EXPECT_EQ(0xabcd, dut.getAlarms());
 	EXPECT_EQ(0x5678, dut.getCurrent());
 	EXPECT_FALSE(dut.isAtSavedPreset());
+	EXPECT_FALSE(dut.isPresetActive(2));
 
 	preset.data8[3] = 0xff;
 	dut.processFrame(CanBusIndex::Bus0, preset, getTimeNowNt());
 	EXPECT_EQ(0xff, dut.getSelectedPreset());
+	EXPECT_FALSE(dut.isPresetActive(2));
 }
 
 TEST(ShockPreload, AcceptsOnlyPrimaryStandardProtocolFrames) {
@@ -146,6 +150,7 @@ TEST(ShockPreload, SendsSpecifiedCommandsAndPolls) {
 	EXPECT_EQ(1, tx.data[1]);
 	EXPECT_EQ(1, dut.getSelectedPreset());
 	EXPECT_TRUE(dut.isAtSavedPreset());
+	EXPECT_TRUE(dut.isPresetActive(1));
 	dut.handleTsCommand(SHOCK_PRELOAD_LOAD_SLOT_1);
 	EXPECT_EQ(4, tx.count);
 	EXPECT_EQ(0x02, tx.data[0]);

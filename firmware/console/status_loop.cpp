@@ -346,6 +346,11 @@ static void updateRawSensors() {
 	auto& shockPreload = engine->module<ShockPreload>();
 	engine->outputChannels.shockPreloadOnline = shockPreload->isOnline();
 	engine->outputChannels.shockPreloadAtPreset = shockPreload->isAtSavedPreset();
+	engine->outputChannels.shockPreloadPreset0Active = shockPreload->isPresetActive(0);
+	engine->outputChannels.shockPreloadPreset1Active = shockPreload->isPresetActive(1);
+	engine->outputChannels.shockPreloadPreset2Active = shockPreload->isPresetActive(2);
+	engine->outputChannels.shockPreloadPreset3Active = shockPreload->isPresetActive(3);
+	engine->outputChannels.shockPreloadPreset4Active = shockPreload->isPresetActive(4);
 	engine->outputChannels.shockPreloadPosition = shockPreload->getPosition();
 	engine->outputChannels.shockPreloadTarget = shockPreload->getControllerTarget();
 	engine->outputChannels.shockPreloadState = shockPreload->getState();

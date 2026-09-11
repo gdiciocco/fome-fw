@@ -89,14 +89,26 @@ bool ShockPreload::isAtSavedPreset() const {
 		return false;
 	}
 
-	constexpr int tolerance = 1;
 	for (size_t i = 0; i < efi::size(m_presetValues); i++) {
-		if ((m_seenPresets & (1 << i)) && std::abs(static_cast<int>(m_position) - m_presetValues[i]) <= tolerance) {
+		if (isPositionAtPreset(i)) {
 			return true;
 		}
 	}
 
 	return false;
+}
+
+bool ShockPreload::isPresetActive(uint8_t preset) const {
+	return isOnline() && m_selectedPreset == preset && isPositionAtPreset(preset);
+}
+
+bool ShockPreload::isPositionAtPreset(size_t preset) const {
+	if (preset >= efi::size(m_presetValues) || !(m_seenPresets & (1 << preset))) {
+		return false;
+	}
+
+	constexpr int tolerance = 1;
+	return std::abs(static_cast<int>(m_position) - m_presetValues[preset]) <= tolerance;
 }
 
 void ShockPreload::onSlowCallback() {
