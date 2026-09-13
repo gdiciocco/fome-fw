@@ -1,6 +1,7 @@
 .dep*
 .gradle/
 build/
+bin/
 build_kinetis/
 pinouts
 workarea
