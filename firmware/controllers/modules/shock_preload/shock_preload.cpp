@@ -5,6 +5,9 @@
 #include "can_msg_tx.h"
 
 namespace {
+// Commands use a fixed-size payload; unused bytes remain zero-initialized.
+constexpr uint8_t CommandFrameDlc = 8;
+
 constexpr uint8_t readU8Percent(uint8_t value) {
 	return std::min<uint8_t>(value, 100);
 }
@@ -128,7 +131,7 @@ void ShockPreload::sendSimpleCommand(uint8_t command) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, 1, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
 	msg[0] = command;
 #else
 	(void)command;
@@ -141,7 +144,7 @@ void ShockPreload::sendValueCommand(uint8_t command, uint16_t value) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, 3, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
 	msg[0] = command;
 	msg[1] = value & 0xff;
 	msg[2] = value >> 8;
@@ -157,7 +160,7 @@ void ShockPreload::sendRelativeCommand(int16_t value) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, 3, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
 	msg[0] = CommandMoveRelative;
 	msg[1] = static_cast<uint16_t>(value) & 0xff;
 	msg[2] = static_cast<uint16_t>(value) >> 8;
@@ -172,7 +175,7 @@ void ShockPreload::sendPresetCommand(uint8_t command, uint8_t slot) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, 2, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
 	msg[0] = command;
 	msg[1] = slot;
 #else

@@ -5,18 +5,23 @@
 
 class ShockPreloadTxMock final : public ICanTransmitMock {
 public:
-	void onTx(uint32_t id, uint8_t dlc, uint8_t d0, uint8_t d1, uint8_t d2, uint8_t, uint8_t, uint8_t, uint8_t, uint8_t) override {
+	void onTx(uint32_t id, uint8_t dlc, uint8_t d0, uint8_t d1, uint8_t d2, uint8_t d3, uint8_t d4, uint8_t d5, uint8_t d6, uint8_t d7) override {
 		lastId = id;
 		lastDlc = dlc;
 		data[0] = d0;
 		data[1] = d1;
 		data[2] = d2;
+		data[3] = d3;
+		data[4] = d4;
+		data[5] = d5;
+		data[6] = d6;
+		data[7] = d7;
 		count++;
 	}
 
 	uint32_t lastId = 0;
 	uint8_t lastDlc = 0;
-	uint8_t data[3] = {};
+	uint8_t data[8] = {};
 	int count = 0;
 };
 
@@ -126,16 +131,18 @@ TEST(ShockPreload, SendsSpecifiedCommandsAndPolls) {
 	dut.handleTsCommand(SHOCK_PRELOAD_MOVE_DOWN_2);
 	EXPECT_EQ(1, tx.count);
 	EXPECT_EQ(0x720, tx.lastId);
-	EXPECT_EQ(3, tx.lastDlc);
+	EXPECT_EQ(8, tx.lastDlc);
 	EXPECT_EQ(0x06, tx.data[0]);
 	EXPECT_EQ(0xfe, tx.data[1]);
 	EXPECT_EQ(0xff, tx.data[2]);
+	EXPECT_THAT(tx.data, ::testing::ElementsAre(0x06, 0xfe, 0xff, 0, 0, 0, 0, 0));
 
 	dut.handleTsCommand(SHOCK_PRELOAD_LOAD_SLOT_4);
 	EXPECT_EQ(2, tx.count);
-	EXPECT_EQ(2, tx.lastDlc);
+	EXPECT_EQ(8, tx.lastDlc);
 	EXPECT_EQ(0x02, tx.data[0]);
 	EXPECT_EQ(4, tx.data[1]);
+	EXPECT_THAT(tx.data, ::testing::ElementsAre(0x02, 4, 0, 0, 0, 0, 0, 0));
 	EXPECT_EQ(4, dut.getSelectedPreset());
 
 	CANRxFrame status = {};
@@ -160,13 +167,17 @@ TEST(ShockPreload, SendsSpecifiedCommandsAndPolls) {
 	engineConfiguration->shockPreloadCommandTarget = 73;
 	dut.handleTsCommand(SHOCK_PRELOAD_SET_TARGET);
 	EXPECT_EQ(5, tx.count);
+	EXPECT_EQ(8, tx.lastDlc);
 	EXPECT_EQ(0x01, tx.data[0]);
 	EXPECT_EQ(73, tx.data[1]);
 	EXPECT_EQ(0, tx.data[2]);
+	EXPECT_THAT(tx.data, ::testing::ElementsAre(0x01, 73, 0, 0, 0, 0, 0, 0));
 
 	dut.onSlowCallback();
 	EXPECT_EQ(6, tx.count);
+	EXPECT_EQ(8, tx.lastDlc);
 	EXPECT_EQ(0x10, tx.data[0]);
+	EXPECT_THAT(tx.data, ::testing::ElementsAre(0x10, 0, 0, 0, 0, 0, 0, 0));
 
 	setCanTxMockHandler(nullptr);
 }
