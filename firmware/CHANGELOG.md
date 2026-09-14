@@ -40,6 +40,8 @@ or
  - CAN wideband controllers now report "time since last CAN frame received" and a TunerStudio alive indicator for all 4 wideband channels (previously only 2 had live data at all), so a dead/disconnected controller can be spotted even when its lambda reading is invalid
 
 ### Fixed
+ - Fixed board settings are now greyed out throughout TunerStudio, including the full pinout pages, and protected when loading tunes. This prevents CRC errors caused by editing values that the ECU immediately restores. Hardware revision dependent settings remain editable where the board permits them.
+ - MC33816 initialization now respects the selected SPI bus. VVT applies its cranking RPM limit without changing the saved calibration.
  - STM32F7 dual-bank ECUs no longer stall (potentially stopping the engine) when burning configuration with the engine running - configuration is now committed to flash when the engine is stopped #776
  - SD card log field names now include their category prefix (e.g. `Boost: Target` instead of just `Target`), matching the names shown in TunerStudio
 
