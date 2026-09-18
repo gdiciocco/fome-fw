@@ -25,7 +25,9 @@ void efiExtiInit() {
 
 struct ExtiChannel {
 	ExtiCallback Callback = nullptr;
+	ExtiCallbackWithLevel CallbackWithLevel = nullptr;
 	void* CallbackData;
+	ioline_t Line;
 
 	// Name is also used as an enable bit
 	const char* Name = nullptr;
@@ -33,8 +35,9 @@ struct ExtiChannel {
 
 static ExtiChannel channels[16];
 
-// EXT is not able to give you the front direction but you could read the pin in the callback.
-bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, ExtiCallback cb, void* cb_data) {
+// Capture the level in the fast ISR for callers that need the edge direction.
+static bool enableExtiPin(const char* msg, brain_pin_e brainPin, uint32_t mode,
+		ExtiCallback cb, ExtiCallbackWithLevel cbWithLevel, void* cb_data) {
 	/* paranoid check, in case of Gpio::Unassigned getHwPort will return NULL
 	 * and we will fail on next check */
 	if (!isBrainPinValid(brainPin)) {
@@ -59,7 +62,7 @@ bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, Exti
 	auto& channel = channels[index];
 
 	/* is this index already used? */
-	if (channel.Callback) {
+	if (channel.Callback || channel.CallbackWithLevel) {
 		firmwareError(
 				ObdCode::CUSTOM_ERR_PIN_ALREADY_USED_2,
 				"%s: pin %s/index %d: exti index already used by %s",
@@ -72,12 +75,23 @@ bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, Exti
 	}
 
 	channel.Callback = cb;
+	channel.CallbackWithLevel = cbWithLevel;
 	channel.CallbackData = cb_data;
 	channel.Name = msg;
 
 	ioline_t line = PAL_LINE(port, index);
+	channel.Line = line;
 	palEnableLineEvent(line, mode);
 	return true;
+}
+
+bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, ExtiCallback cb, void* cb_data) {
+	return enableExtiPin(msg, brainPin, mode, cb, nullptr, cb_data);
+}
+
+bool efiExtiEnablePinWithLevel(const char* msg, brain_pin_e brainPin, uint32_t mode,
+		ExtiCallbackWithLevel cb, void* cb_data) {
+	return enableExtiPin(msg, brainPin, mode, nullptr, cb, cb_data);
 }
 
 void efiExtiDisablePin(brain_pin_e brainPin) {
@@ -98,7 +112,7 @@ void efiExtiDisablePin(brain_pin_e brainPin) {
 	auto& channel = channels[index];
 
 	/* is this index was used? */
-	if (!channel.Callback) {
+	if (!channel.Callback && !channel.CallbackWithLevel) {
 		return;
 	}
 
@@ -108,6 +122,7 @@ void efiExtiDisablePin(brain_pin_e brainPin) {
 	/* mark unused */
 	channel.Name = nullptr;
 	channel.Callback = nullptr;
+	channel.CallbackWithLevel = nullptr;
 	channel.CallbackData = nullptr;
 }
 
@@ -119,6 +134,7 @@ static inline void triggerInterrupt() {
 struct ExtiQueueEntry {
 	efitick_t Timestamp;
 	uint8_t Channel;
+	bool Level;
 };
 
 template <typename T, size_t TSize>
@@ -188,7 +204,9 @@ CH_IRQ_HANDLER(STM32_I2C1_EVENT_HANDLER) {
 		if (timestamp != 0) {
 			auto& channel = channels[entry.Channel];
 
-			if (channel.Callback) {
+			if (channel.CallbackWithLevel) {
+				channel.CallbackWithLevel(channel.CallbackData, timestamp, entry.Level);
+			} else if (channel.Callback) {
 				channel.Callback(channel.CallbackData, timestamp);
 			}
 		} else {
@@ -212,7 +230,10 @@ void handleExtiIsr(uint8_t index) {
 	extiGetAndClearGroup1(1U << index, pr);
 
 	if (pr & (1 << index)) {
-		queue.push({getTimeNowNt(), index});
+		auto timestamp = getTimeNowNt();
+		auto& channel = channels[index];
+		bool level = channel.CallbackWithLevel && palReadLine(channel.Line) == PAL_HIGH;
+		queue.push({timestamp, index, level});
 
 		triggerInterrupt();
 	}
