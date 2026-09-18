@@ -127,10 +127,10 @@ struct ExtiQueueEntry {
 template <typename T, size_t TSize>
 class ExtiQueue {
 public:
-	void push(const T& val) {
+	bool push(const T& val) {
 		if ((m_write == m_read - 1) || (m_write == TSize - 1 && m_read == 0)) {
 			// queue full, drop
-			return;
+			return false;
 		}
 
 		arr[m_write] = val;
@@ -140,6 +140,7 @@ public:
 		if (m_write == TSize) {
 			m_write = 0;
 		}
+		return true;
 	}
 
 	expected<T> pop() {
@@ -168,7 +169,7 @@ private:
 
 static CCM_OPTIONAL ExtiQueue<ExtiQueueEntry, 32> queue;
 
-static uint8_t overflowCounter = 0;
+static volatile uint8_t overflowCounter = 0;
 
 CH_IRQ_HANDLER(STM32_I2C1_EVENT_HANDLER) {
 	OSAL_IRQ_PROLOGUE();
@@ -194,8 +195,6 @@ CH_IRQ_HANDLER(STM32_I2C1_EVENT_HANDLER) {
 			if (channel.Callback) {
 				channel.Callback(channel.CallbackData, timestamp, entry.Level);
 			}
-		} else {
-			overflowCounter++;
 		}
 	}
 
@@ -218,9 +217,12 @@ void handleExtiIsr(uint8_t index) {
 		auto timestamp = getTimeNowNt();
 		auto& channel = channels[index];
 		bool level = palReadLine(channel.Line) == PAL_HIGH;
-		queue.push({timestamp, index, level});
-
-		triggerInterrupt();
+		if (queue.push({timestamp, index, level})) {
+			triggerInterrupt();
+		} else if (overflowCounter < 255) {
+			// Saturate so a busy input cannot wrap the diagnostic back to zero.
+			overflowCounter++;
+		}
 	}
 }
 
