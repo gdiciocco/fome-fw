@@ -16,8 +16,8 @@ bool isNearPeriod(float periodUs, float nominalUs) {
 	return periodUs >= nominalUs * (1 - PeriodTolerance) && periodUs <= nominalUs * (1 + PeriodTolerance);
 }
 
-void hellaOpsTExtiCallback(void* arg, efitick_t nowNt) {
-	reinterpret_cast<HellaOpsTSensor*>(arg)->onEdge(nowNt);
+void hellaOpsTExtiCallback(void* arg, efitick_t nowNt, bool level) {
+	reinterpret_cast<HellaOpsTSensor*>(arg)->onEdge(nowNt, level);
 }
 } // namespace
 
