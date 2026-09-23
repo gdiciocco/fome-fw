@@ -78,6 +78,8 @@ bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, Exti
 
 	ioline_t line = PAL_LINE(port, index);
 	channel.Line = line;
+
+	palSetLineMode(line, PAL_MODE_INPUT);
 	palEnableLineEvent(line, mode);
 	return true;
 }
