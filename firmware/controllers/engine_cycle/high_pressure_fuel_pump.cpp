@@ -72,7 +72,7 @@ angle_t HpfpLobe::findNextLobe() {
 // As a percent of the full pump stroke
 float HpfpQuantity::calcFuelPercent(float rpm) {
 	float fuel_requested_cc_per_cycle =
-			engine->cylinders[0].getInjectionMass() * (1.f / fuelDensity) * engineConfiguration->cylindersCount;
+			engine->cylinders[0].getInjectionMass() * (1.f / fuelDensity) * engine->engineState.cylinderCount;
 	float fuel_requested_cc_per_lobe = fuel_requested_cc_per_cycle / engineConfiguration->hpfpCamLobes;
 	return 100.f * fuel_requested_cc_per_lobe / engineConfiguration->hpfpPumpVolume +
 		   interpolate3d(
@@ -166,6 +166,13 @@ void HpfpController::onFastCallback() {
 			scheduleNextCycle();
 		}
 	}
+}
+
+void HpfpController::onEngineStop() {
+	// Our on/off/on chain re-arms itself from pinTurnOff, so it only survives while the engine
+	// is turning. Stopping drops any pending event, which would leave us "running" with nothing
+	// scheduled and no way back - clear the flag so onFastCallback starts a fresh chain.
+	m_running = false;
 }
 
 void HpfpController::pinTurnOn(HpfpController* self) {

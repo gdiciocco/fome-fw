@@ -36,9 +36,6 @@ void initNewSensors() {
 	initBaro();
 	initAuxSpeedSensors();
 
-	initFuelLevel();
-	initMaf();
-
 	initAuxDigital();
 
 	// Init CLI functionality for sensors (mocking)
@@ -69,11 +66,15 @@ void stopSensors() {
 	deinitTurbochargerSpeedSensor();
 	deinitAuxSpeedSensors();
 	deinitMap();
+	deinitMaf();
+	deinitFuelLevel();
 }
 
 void reconfigureSensors() {
 	initVbatt();
 	initMap();
+	initMaf();
+	initFuelLevel();
 	initTps();
 	initFluidPressure();
 	initThermistors();

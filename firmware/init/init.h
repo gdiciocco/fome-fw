@@ -48,4 +48,6 @@ void deinitAuxSensors();
 void deInitVehicleSpeedSensor();
 void deinitTurbochargerSpeedSensor();
 void deinitMap();
+void deinitMaf();
+void deinitFuelLevel();
 void deinitAuxSpeedSensors();

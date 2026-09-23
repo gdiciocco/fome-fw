@@ -23,6 +23,7 @@ static const uint8_t order_1_THEN_2_THEN_3_THEN_4_THEN_5_THEN_6[] = {1, 2, 3, 4,
 static const uint8_t order_1_6_3_2_5_4[] = {1, 6, 3, 2, 5, 4};
 static const uint8_t order_1_4_3_6_2_5[] = {1, 4, 3, 6, 2, 5};
 static const uint8_t order_1_6_2_4_3_5[] = {1, 6, 2, 4, 3, 5};
+static const uint8_t order_1_6_2_5_3_4[] = {1, 6, 2, 5, 3, 4};
 static const uint8_t order_1_6_5_4_3_2[] = {1, 6, 5, 4, 3, 2};
 static const uint8_t order_1_4_5_2_3_6[] = {1, 4, 5, 2, 3, 6};
 
@@ -54,7 +55,9 @@ static const uint8_t order_1_2_3_4_5_6_7_8_9_10_11_12[] = {1, 2, 3, 4, 5, 6, 7, 
 static const uint8_t order_1_14_9_4_7_12_15_6_13_8_3_16_11_2_5_10[] = {
 		1, 14, 9, 4, 7, 12, 15, 6, 13, 8, 3, 16, 11, 2, 5, 10};
 
-static size_t getFiringOrderLength() {
+// When adding a firing order, keep this switch, getFiringOrderTable() below, the firing_order_e enum
+// (firing_order.h) and the "cylindersCount" selectExpression in tunerstudio.template.ini all in sync.
+size_t getFiringOrderLength() {
 	switch (engineConfiguration->firingOrder) {
 		case FO_1:
 			return 1;
@@ -82,6 +85,7 @@ static size_t getFiringOrderLength() {
 		case FO_1_6_3_2_5_4:
 		case FO_1_4_3_6_2_5:
 		case FO_1_6_2_4_3_5:
+		case FO_1_6_2_5_3_4:
 		case FO_1_6_5_4_3_2:
 		case FO_1_4_5_2_3_6:
 			return 6;
@@ -162,6 +166,8 @@ static const uint8_t* getFiringOrderTable() {
 			return order_1_4_3_6_2_5;
 		case FO_1_6_2_4_3_5:
 			return order_1_6_2_4_3_5;
+		case FO_1_6_2_5_3_4:
+			return order_1_6_2_5_3_4;
 		case FO_1_6_5_4_3_2:
 			return order_1_6_5_4_3_2;
 		case FO_1_4_5_2_3_6:
@@ -223,11 +229,6 @@ size_t getCylinderNumberAtIndex(size_t index) {
 
 	if (firingOrderLength < 1 || firingOrderLength > MAX_CYLINDER_COUNT) {
 		firmwareError(ObdCode::CUSTOM_FIRING_LENGTH, "fol %d", firingOrderLength);
-		return 0;
-	}
-	if (engineConfiguration->cylindersCount != firingOrderLength) {
-		// May 2020 this somehow still happens with functional tests, maybe race condition?
-		firmwareError("Wrong cyl count for firing order, expected %d cylinders", firingOrderLength);
 		return 0;
 	}
 

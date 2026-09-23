@@ -81,7 +81,6 @@ bool efiExtiEnablePin(const char* msg, brain_pin_e brainPin, uint32_t mode, Exti
 	palEnableLineEvent(line, mode);
 	return true;
 }
-
 void efiExtiDisablePin(brain_pin_e brainPin) {
 	/* paranoid check, in case of Gpio::Unassigned getHwPort will return NULL
 	 * and we will fail on next check */

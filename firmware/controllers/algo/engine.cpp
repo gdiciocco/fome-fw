@@ -25,6 +25,7 @@
 #include "boost_control.h"
 #include "ac_control.h"
 #include "vr_pwm.h"
+#include "can_vss.h"
 #if EFI_MC33816
 #include "mc33816.h"
 #endif // EFI_MC33816
@@ -91,6 +92,10 @@ void Engine::periodicSlowCallback() {
 
 	updateVrPwm();
 
+	// Remember the current ethanol content so we have something sane to use before the flex
+	// sensor wakes up on the next start
+	updateStoredFlexEthanolPercent();
+
 	enginePins.o2heater.setValue(engineConfiguration->forceO2Heating || engine->rpmCalculator.isRunning());
 	enginePins.starterRelayDisable.setValue(Sensor::getOrZero(SensorType::Rpm) < engineConfiguration->cranking.rpm);
 
@@ -132,8 +137,16 @@ static bool getClutchUpState() {
 
 static bool getBrakePedalState() {
 	if (isBrainPinValid(engineConfiguration->brakePedalPin)) {
-		return efiReadPin(engineConfiguration->brakePedalPin);
+		return engineConfiguration->brakePedalPinInverted ^ efiReadPin(engineConfiguration->brakePedalPin);
 	}
+
+#if EFI_CAN_SUPPORT
+	// Some vehicles broadcast the brake switch on CAN, use that if we have it
+	if (auto canBrake = getCanBrakePedalState()) {
+		return canBrake.Value;
+	}
+#endif // EFI_CAN_SUPPORT
+
 	return engine->engineState.lua.brakePedalState;
 }
 

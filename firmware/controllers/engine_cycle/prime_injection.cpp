@@ -107,7 +107,7 @@ void PrimeController::onPrimeStart() {
 	m_isPriming = true;
 
 	InjectorContext ctx;
-	ctx.outputsMask = (1 << engineConfiguration->cylindersCount) - 1;
+	ctx.outputsMask = (1 << engine->engineState.cylinderCount) - 1;
 
 	startInjection(ctx);
 	getScheduler()->schedule("prime end", nullptr, endTime, {onPrimeEndAdapter, this});
@@ -115,7 +115,7 @@ void PrimeController::onPrimeStart() {
 
 void PrimeController::onPrimeEnd() {
 	InjectorContext ctx;
-	ctx.outputsMask = (1 << engineConfiguration->cylindersCount) - 1;
+	ctx.outputsMask = (1 << engine->engineState.cylinderCount) - 1;
 	endInjection(ctx);
 
 	m_isPriming = false;

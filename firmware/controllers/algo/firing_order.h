@@ -12,6 +12,13 @@
 /**
  * thank you
  * https://www.ingenieriaymecanicaautomotriz.com/firing-order-its-purpose-and-order-in-different-numbers-of-cylinders/
+ *
+ * When adding a firing order, THREE places must be kept in sync:
+ *   1. this enum
+ *   2. the switch statements in firing_order.cpp (getFiringOrderLength() and getFiringOrderTable())
+ *   3. the "cylindersCount" selectExpression in tunerstudio.template.ini (indexed by this enum value,
+ *      so its Nth entry must be the cylinder count of firing order N)
+ * plus the firing_order_e dropdown in fome_config.txt.
  */
 typedef enum __attribute__((__packed__)) {
 	FO_1 = 0,
@@ -41,6 +48,7 @@ typedef enum __attribute__((__packed__)) {
 	FO_1_6_3_2_5_4 = 13, // EG33
 	FO_1_4_3_6_2_5 = 27, // VAG v6 different from VAG VR6
 	FO_1_6_2_4_3_5 = 29, // Some 911
+	FO_1_6_2_5_3_4 = 34, // Maserati V6
 
 	// todo: one day we shall support 7 cylinder radial, probably not before one actually approaches us
 	// 1-3-5-7-2-4-6 7-cylinder single row radial engine
@@ -76,7 +84,7 @@ typedef enum __attribute__((__packed__)) {
 	// unfortunately not supported by default firmware because MAX_CYLINDER_COUNT=12 by default
 	FO_1_14_9_4_7_12_15_6_13_8_3_16_11_2_5_10 = 22, // WR16
 
-	// next value to use: 34
+	// next value to use: 35
 } firing_order_e;
 
 /**
@@ -87,3 +95,9 @@ typedef enum __attribute__((__packed__)) {
  * indicating cylinder 4.
  */
 size_t getCylinderNumberAtIndex(size_t cylinderIndex);
+
+/**
+ * The number of cylinders the engine has, derived from the configured firing order.
+ * This is the authoritative source of cylinder count - firing order uniquely determines it.
+ */
+size_t getFiringOrderLength();

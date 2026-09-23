@@ -3,6 +3,7 @@
 #include "init.h"
 #include "functional_sensor.h"
 #include "flex_sensor.h"
+#include "fuel_computer.h"
 
 #include "digital_input_exti.h"
 
@@ -14,7 +15,7 @@ static Biquad flexTempFilter;
 
 static Timer flexFreq, flexPulse;
 
-static void flexCallback(efitick_t nowNt, bool value) {
+static void flexCallback(void*, efitick_t nowNt, bool value) {
 	if (value) {
 		// End pulse timing on rising edge
 		float pulseWidthUs = flexPulse.getElapsedUs(nowNt);
@@ -56,6 +57,12 @@ void initFlexSensor() {
 	// 0.01 means filter bandwidth of ~1hz with ~100hz sensor
 	flexTempFilter.configureLowpass(1, 0.01f);
 	flexSensor.setFunction(converter);
+
+	// Start the flex filter out at the last ethanol content we saw, so that fueling is correct
+	// immediately at startup instead of ramping up as the filter settles
+	if (auto storedFlex = getStoredFlexEthanolPercent()) {
+		converter.preloadFilter(storedFlex.Value);
+	}
 
 #if EFI_PROD_CODE
 	efiExtiEnablePin("flex", flexPin, PAL_EVENT_MODE_BOTH_EDGES, flexCallback, nullptr);

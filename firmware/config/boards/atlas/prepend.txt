@@ -44,3 +44,5 @@
 #define ts_readonly_spi4sckPin 1
 #define ts_readonly_vbattAdcChannel 1
 #define ts_readonly_vbattDividerCoeff 1
+
+#define LUA_SCRIPT_SIZE 15000

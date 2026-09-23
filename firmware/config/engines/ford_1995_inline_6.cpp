@@ -19,7 +19,6 @@
  * @brief Default values for persistent properties
  */
 void setFordInline6() {
-	engineConfiguration->cylindersCount = 6;
 
 	setCamOperationMode();
 
@@ -84,7 +83,6 @@ void setFordInline6() {
 	engineConfiguration->tpsMax = convertVoltageTo10bitADC(4.538);
 
 	//	engineConfiguration->vbattAdcChannel = 0; //
-	engineConfiguration->mafAdcChannel = EFI_ADC_1;
 
 	engineConfiguration->triggerInputPins[0] = Gpio::A8;
 	engineConfiguration->triggerInputPins[1] = Gpio::A5;

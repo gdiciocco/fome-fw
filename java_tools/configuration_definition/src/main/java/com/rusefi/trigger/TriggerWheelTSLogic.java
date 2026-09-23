@@ -59,6 +59,10 @@ public class TriggerWheelTSLogic {
         /*
          * these are templated into tunerstudio.template.ini file
          * note that TT_TOOTHED_WHEEL is not mentioned in the meta file, we handle it manually right in tunerstudio.template.ini file
+         *
+         * Register via DefinitionsState (not just VariableRegistry): the newparse TsWriter resolves
+         * @@...@@ tokens through ParseState.findDefinition(), so registering only into VariableRegistry
+         * leaves these as "MISSING DEFINITION" in the generated ini.
          */
         registerDefinition(definitionsState, variableRegistry, TRIGGER_TYPE_WITHOUT_KNOWN_LOCATION, triggerTypesWithoutKnownLocation);
         registerDefinition(definitionsState, variableRegistry, TRIGGER_TYPE_WITH_SECOND_WHEEL, triggerTypesWithSecondWheel);
