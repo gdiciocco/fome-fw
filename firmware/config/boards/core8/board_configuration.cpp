@@ -94,6 +94,8 @@ Gpio getWarningLedPin() {
 }
 
 void setBoardConfigOverrides() {
+	engineConfiguration->isSdCardEnabled = false;
+
 	setupVbatt();
 	setEtbConfig();
 	setStepperConfig();
@@ -124,8 +126,6 @@ static void setupDefaultSensorInputs() {
 void setBoardDefaultConfiguration() {
 	setInjectorPins();
 	setIgnitionPins();
-
-	engineConfiguration->isSdCardEnabled = true;
 
 	engineConfiguration->canWriteEnabled = true;
 	engineConfiguration->canReadEnabled = true;

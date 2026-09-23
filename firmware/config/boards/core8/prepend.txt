@@ -26,6 +26,7 @@
 #define ts_readonly_etbIo2_disablePin 1
 #define ts_readonly_etb_use_two_wires 1
 #define ts_readonly_iat_bias_resistor 1
+#define ts_readonly_isSdCardEnabled 1
 #define ts_readonly_idle_stepperDirectionPin 1
 #define ts_readonly_idle_stepperStepPin 1
 #define ts_readonly_stepperEnablePin 1
