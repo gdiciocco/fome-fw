@@ -53,6 +53,7 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Shock preload status polling now runs in the CAN TX thread, preventing a full CAN mailbox from delaying CLT and IAT updates.
  - Fixed board settings are now greyed out throughout TunerStudio, including the full pinout pages, and protected when loading tunes. This prevents CRC errors caused by editing values that the ECU immediately restores. Hardware revision dependent settings remain editable where the board permits them.
  - MC33816 initialization now respects the selected SPI bus. VVT applies its cranking RPM limit without changing the saved calibration.
   - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors

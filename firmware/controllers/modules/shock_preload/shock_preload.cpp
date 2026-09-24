@@ -114,7 +114,7 @@ bool ShockPreload::isPositionAtPreset(size_t preset) const {
 	return std::abs(static_cast<int>(m_position) - m_presetValues[preset]) <= tolerance;
 }
 
-void ShockPreload::onSlowCallback() {
+void ShockPreload::pollStatus() {
 	if (!isEnabled()) {
 		return;
 	}

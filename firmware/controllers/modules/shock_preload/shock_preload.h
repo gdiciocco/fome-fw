@@ -14,7 +14,7 @@ public:
 	ShockPreload();
 
 	void initNoConfiguration() override;
-	void onSlowCallback() override;
+	void pollStatus();
 
 	bool acceptFrame(CanBusIndex busIndex, const CANRxFrame& frame) const override;
 	void decodeFrame(const CANRxFrame& frame, efitick_t nowNt) override;
