@@ -36,6 +36,11 @@ enum class AdcChannelMode : char {
 };
 
 void updateSlowAdc(efitick_t nowNt);
+uint32_t getSlowAdcMaxUpdateGapUs();
+uint32_t getSlowAdcReadFailureCount();
+uint32_t getSlowAdcGapOver10msCount();
+uint32_t getSlowAdcMaxConversionUs();
+uint32_t getSlowAdcConversionOver10msCount();
 
 // deprecated - migrate to 'getAdcChannelBrainPin'
 int getAdcChannelPin(adc_channel_e hwChannel);

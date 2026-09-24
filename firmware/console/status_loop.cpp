@@ -45,6 +45,7 @@
 #include "frequency_sensor.h"
 #include "digital_input_exti.h"
 #include "dc_motors.h"
+#include "adc_inputs.h"
 
 extern bool main_loop_started;
 
@@ -424,6 +425,11 @@ static void updateMiscSensors() {
 #if HAL_USE_ADC
 	engine->outputChannels.internalMcuTemperature =
 			Sensor::get(SensorType::EcuInternalTemperature).value_or(getMCUInternalTemperature());
+	engine->outputChannels.slowAdcMaxUpdateGapUs = getSlowAdcMaxUpdateGapUs();
+	engine->outputChannels.slowAdcReadFailureCount = getSlowAdcReadFailureCount();
+	engine->outputChannels.slowAdcGapOver10msCount = getSlowAdcGapOver10msCount();
+	engine->outputChannels.slowAdcMaxConversionUs = getSlowAdcMaxConversionUs();
+	engine->outputChannels.slowAdcConversionOver10msCount = getSlowAdcConversionOver10msCount();
 #endif /* HAL_USE_ADC */
 }
 
