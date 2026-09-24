@@ -16,6 +16,9 @@
 #include "obd2.h"
 #include "can_sensor.h"
 #include "rusefi_wideband.h"
+#if defined(MODULE_SHOCK_PRELOAD)
+#include "shock_preload.h"
+#endif
 
 CanWrite::CanWrite(CanBusIndex bus)
 	: PeriodicController(bus == CanBusIndex::Bus0 ? "CAN TX 0" : "CAN TX 1", PRIO_CAN_TX, CAN_CYCLE_FREQ)
@@ -63,6 +66,11 @@ void CanWrite::PeriodicTask(efitick_t) {
 	// Dashboard messages are all hardcoded to Bus0
 	if (m_bus == CanBusIndex::Bus0) {
 		updateDash(cycle);
+#if defined(MODULE_SHOCK_PRELOAD)
+		// CAN transmission can wait for a free mailbox. Keep the preload status
+		// request on the CAN TX thread instead of blocking the main loop.
+		engine->module<ShockPreload>()->pollStatus();
+#endif
 	}
 
 #if EFI_WIDEBAND_FIRMWARE_UPDATE

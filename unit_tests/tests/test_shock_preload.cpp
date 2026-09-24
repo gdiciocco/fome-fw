@@ -174,6 +174,8 @@ TEST(ShockPreload, SendsSpecifiedCommandsAndPolls) {
 	EXPECT_THAT(tx.data, ::testing::ElementsAre(0x01, 73, 0, 0, 0, 0, 0, 0));
 
 	dut.onSlowCallback();
+	EXPECT_EQ(5, tx.count);
+	dut.pollStatus();
 	EXPECT_EQ(6, tx.count);
 	EXPECT_EQ(8, tx.lastDlc);
 	EXPECT_EQ(0x10, tx.data[0]);
@@ -190,6 +192,7 @@ TEST(ShockPreload, DisabledControllerDoesNotTransmit) {
 
 	dut.handleTsCommand(SHOCK_PRELOAD_REQUEST_STATUS);
 	dut.onSlowCallback();
+	dut.pollStatus();
 	EXPECT_EQ(0, tx.count);
 
 	setCanTxMockHandler(nullptr);
