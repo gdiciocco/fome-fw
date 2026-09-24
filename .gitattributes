@@ -21,6 +21,7 @@
 *.ini text eol=lf
 *.input text eol=lf
 *.rules text eol=lf
+java_tools/gradlew text eol=lf
 
 # KiCad files
 *.dsn text eol=lf

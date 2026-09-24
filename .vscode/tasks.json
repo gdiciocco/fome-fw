@@ -7,10 +7,30 @@
 			"label": "Core8: Build firmware",
 			"detail": "Compila bootloader e firmware Core8 e genera l'INI TunerStudio.",
 			"type": "shell",
-			"command": "bash",
+			"command": "powershell",
 			"args": [
-				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
-				"build"
+				"-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+				"${workspaceFolder}/.vscode/scripts/core8_wsl.ps1", "-Action", "build"
+			],
+			"options": {
+				"cwd": "${workspaceFolder}"
+			},
+			"problemMatcher": "$gcc",
+			"group": "build",
+			"presentation": {
+				"reveal": "always",
+				"panel": "dedicated",
+				"clear": true
+			}
+		},
+		{
+			"label": "Core8: Clean rebuild",
+			"detail": "Pulisce gli artefatti delle build precedenti e ricompila la Core8.",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+				"${workspaceFolder}/.vscode/scripts/core8_wsl.ps1", "-Action", "rebuild"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -27,10 +47,10 @@
 			"label": "Core8: Flash firmware (USB DFU)",
 			"detail": "Scrive firmware/deliver/fome.bin, verifica e avvia la Core8.",
 			"type": "shell",
-			"command": "bash",
+			"command": "powershell",
 			"args": [
-				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
-				"flash"
+				"-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+				"${workspaceFolder}/.vscode/scripts/core8_wsl.ps1", "-Action", "flash"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -46,10 +66,10 @@
 			"label": "Core8: Build + Flash USB DFU",
 			"detail": "Esegue in sequenza compilazione, flash, verifica e avvio della Core8.",
 			"type": "shell",
-			"command": "bash",
+			"command": "powershell",
 			"args": [
-				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
-				"all"
+				"-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+				"${workspaceFolder}/.vscode/scripts/core8_wsl.ps1", "-Action", "all"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"
@@ -69,10 +89,10 @@
 			"label": "Core8: Show TunerStudio INI",
 			"detail": "Mostra i percorsi Linux e Windows e la firma dell'INI Core8.",
 			"type": "shell",
-			"command": "bash",
+			"command": "powershell",
 			"args": [
-				"${workspaceFolder}/.vscode/scripts/core8_dfu.sh",
-				"ini"
+				"-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+				"${workspaceFolder}/.vscode/scripts/core8_wsl.ps1", "-Action", "ini"
 			],
 			"options": {
 				"cwd": "${workspaceFolder}"

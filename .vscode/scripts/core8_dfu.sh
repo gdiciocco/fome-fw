@@ -39,11 +39,7 @@ find_programmer() {
 	die "STM32_Programmer_CLI non trovato. Installa STM32CubeProgrammer o imposta STM32_PROGRAMMER_CLI."
 }
 
-build_core8() {
-	printf '\n== Compilazione FOME Core8 ==\n'
-
-	# Gli output sono condivisi fra le board. Una pulizia completa evita che stamp,
-	# PCH o oggetti di una build precedente vengano riutilizzati per Core8.
+clean_core8() {
 	make -C "${FW_DIR}" clean \
 		PROJECT_BOARD=core8 \
 		PROJECT_CPU=ARCH_STM32F4 \
@@ -57,6 +53,30 @@ build_core8() {
 	# altri target (per esempio unit_tests), ma GCC prova comunque a caricarli.
 	if [[ -d "${FW_DIR}/pch/pch.h.gch" ]]; then
 		find "${FW_DIR}/pch/pch.h.gch" -maxdepth 1 -type f -print -delete
+	fi
+}
+
+build_core8() {
+	printf '\n== Compilazione FOME Core8 ==\n'
+
+	# Gli output sono condivisi fra le board: non riusare artefatti di un'altra ECU.
+	if [[ -s "${ELF}" ]]; then
+		local previous_signature
+		previous_signature="$(firmware_signature)"
+		[[ "${previous_signature}" == *".core8."* ]] || \
+			die "Artefatti di un'altra board presenti. Esegui il task Core8: Clean rebuild."
+	fi
+
+	# I timestamp non rilevano un header vecchio ripristinato da Git.
+	local source_hash generated_hash generator_stamp
+	source_hash="$(sha256sum "${FW_DIR}/console/binary/output_channels.txt" | awk '{print $1}')"
+	generated_hash=""
+	if [[ -f "${FW_DIR}/console/binary/output_channels_generated.h" ]]; then
+		generated_hash="$(sha256sum "${FW_DIR}/console/binary/output_channels_generated.h" | awk '{print $1}')"
+	fi
+	generator_stamp="${FW_DIR}/build/core8_live_data.sha256"
+	if [[ ! -f "${generator_stamp}" || "$(cat "${generator_stamp}")" != "${source_hash} ${generated_hash}" ]]; then
+		rm -f "${FW_DIR}/build/generated_live_data.stamp" "${FW_DIR}/build/generated_config.stamp"
 	fi
 
 	(
@@ -78,6 +98,8 @@ build_core8() {
 	printf 'SHA-256: '
 	sha256sum "${IMAGE}" | awk '{print $1}'
 	verify_artifact_signatures
+	generated_hash="$(sha256sum "${FW_DIR}/console/binary/output_channels_generated.h" | awk '{print $1}')"
+	printf '%s %s\n' "${source_hash}" "${generated_hash}" > "${generator_stamp}"
 }
 
 ini_signature() {
@@ -168,6 +190,10 @@ case "${1:-all}" in
 	build)
 		build_core8
 		;;
+	rebuild)
+		clean_core8
+		build_core8
+		;;
 	flash)
 		flash_core8
 		;;
@@ -179,6 +205,6 @@ case "${1:-all}" in
 		show_ini
 		;;
 	*)
-		die "Uso: $0 {build|flash|all|ini}"
+		die "Uso: $0 {build|rebuild|flash|all|ini}"
 		;;
 esac
