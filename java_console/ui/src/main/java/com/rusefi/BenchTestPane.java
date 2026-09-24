@@ -24,6 +24,7 @@ public class BenchTestPane {
         content.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
 
         content.add(grabPerformanceTrace());
+        content.add(grabAdcGapTrace());
         content.add(createFanTest());
         content.add(createAcRelayTest());
         content.add(createFuelPumpTest());
@@ -52,6 +53,16 @@ public class BenchTestPane {
         ActionListener actionListener = e -> uiContext.getLinkManager().COMMUNICATION_EXECUTOR.execute(() -> {
             BinaryProtocol bp = uiContext.getLinkManager().getCurrentStreamState();
             PerformanceTraceHelper.grabPerformanceTrace(button, bp);
+        });
+        button.addActionListener(actionListener);
+        return UiUtils.wrap(button);
+    }
+
+    private Component grabAdcGapTrace() {
+        JButton button = new JButton("Grab ADC Gap Trace");
+        ActionListener actionListener = e -> uiContext.getLinkManager().COMMUNICATION_EXECUTOR.execute(() -> {
+            BinaryProtocol bp = uiContext.getLinkManager().getCurrentStreamState();
+            PerformanceTraceHelper.grabAdcGapTrace(button, bp);
         });
         button.addActionListener(actionListener);
         return UiUtils.wrap(button);

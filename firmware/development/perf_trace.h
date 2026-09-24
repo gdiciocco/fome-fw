@@ -71,7 +71,12 @@ enum class PE : uint8_t {
 	VvtHandleShaftSignal,
 	WifiSpi,
 	WifiHandleEvents,
-	Idle
+	Idle,
+	SlowAdcGap,
+	SlowCallbackSensors,
+	SlowCallbackModules,
+	SlowCallbackTle8888,
+	SlowCallbackBaro,
 	// enum_end_tag
 	// The tag above is consumed by PerfTraceTool.java
 	// please note that the tool requires a comma at the end of last value
@@ -83,6 +88,12 @@ void perfEventInstantGlobal(PE event);
 
 // Enable one buffer's worth of perf tracing, and retrieve the buffer size in bytes
 void perfTraceEnable();
+
+// Keep a rolling trace and stop on the first slow ADC update gap over 10 ms.
+// Returns false if the shared trace buffer is already in use.
+bool perfTraceArmSlowAdcGap();
+void perfTraceFreezeOnSlowAdcGap();
+bool perfTraceAdcGapPending();
 
 // Retrieve the trace buffer
 const BigBufferHandle perfTraceGetBuffer();

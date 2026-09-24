@@ -194,7 +194,12 @@
 #endif
 #else
 // small memory F40x can't fit perf trace
+#if defined(CORE8_ADC_GAP_TRACE)
+// Core8 diagnostic builds use the existing shared 8 KiB buffer for gap capture.
+#define ENABLE_PERF_TRACE TRUE
+#else
 #define ENABLE_PERF_TRACE FALSE
+#endif
 
 #ifndef LUA_USER_HEAP
 #define LUA_USER_HEAP 30000

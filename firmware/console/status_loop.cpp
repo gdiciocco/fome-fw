@@ -46,6 +46,7 @@
 #include "digital_input_exti.h"
 #include "dc_motors.h"
 #include "adc_inputs.h"
+#include "main_loop.h"
 
 extern bool main_loop_started;
 
@@ -430,6 +431,22 @@ static void updateMiscSensors() {
 	engine->outputChannels.slowAdcGapOver10msCount = getSlowAdcGapOver10msCount();
 	engine->outputChannels.slowAdcMaxConversionUs = getSlowAdcMaxConversionUs();
 	engine->outputChannels.slowAdcConversionOver10msCount = getSlowAdcConversionOver10msCount();
+	auto gap = getMainLoopAdcGapDebug();
+	engine->outputChannels.adcGapDebugCount = gap.count;
+	engine->outputChannels.adcGapDebugGapUs = gap.gapUs;
+	engine->outputChannels.adcGapDebugWorkUs = gap.previousWorkUs;
+	engine->outputChannels.adcGapDebugOutsideUs = gap.outsideLoopUs;
+	engine->outputChannels.adcGapDebugAdcUs = gap.previousAdcUs;
+	engine->outputChannels.adcGapDebugEtbUs = gap.previousEtbUs;
+	engine->outputChannels.adcGapDebugSlowUs = gap.previousSlowCallbackUs;
+	engine->outputChannels.adcGapDebugFastUs = gap.previousFastCallbackUs;
+	engine->outputChannels.adcGapDebugModuleTotalUs = gap.slowModuleTotalUs;
+	engine->outputChannels.adcGapDebugModule1Index = gap.slowModuleTopIndex[0];
+	engine->outputChannels.adcGapDebugModule1Us = gap.slowModuleTopUs[0];
+	engine->outputChannels.adcGapDebugModule2Index = gap.slowModuleTopIndex[1];
+	engine->outputChannels.adcGapDebugModule2Us = gap.slowModuleTopUs[1];
+	engine->outputChannels.adcGapDebugModule3Index = gap.slowModuleTopIndex[2];
+	engine->outputChannels.adcGapDebugModule3Us = gap.slowModuleTopUs[2];
 #endif /* HAL_USE_ADC */
 }
 

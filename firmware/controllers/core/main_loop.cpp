@@ -2,6 +2,10 @@
 
 #include "periodic_thread_controller.h"
 #include "electronic_throttle.h"
+#include "main_loop.h"
+#include "perf_trace.h"
+
+#include <algorithm>
 
 #define MAIN_LOOP_RATE 1000
 
@@ -24,9 +28,17 @@ private:
 	int m_cycleCounter = 0;
 
 	Timer m_stallTimer;
+	efitick_t m_previousLoopEndNt = 0;
+	efitick_t m_previousAdcStartNt = 0;
+	MainLoopAdcGapDebug m_sinceLastAdc;
 };
 
 static MainLoop mainLoop CCM_OPTIONAL;
+static MainLoopAdcGapDebug s_lastAdcGap;
+
+MainLoopAdcGapDebug getMainLoopAdcGapDebug() {
+	return s_lastAdcGap;
+}
 
 void initMainLoop() {
 	mainLoop.startMainLoop();
@@ -37,6 +49,11 @@ MainLoop::MainLoop()
 
 void MainLoop::PeriodicTask(efitick_t nowNt) {
 	ScopePerf perf(PE::MainLoop);
+	MainLoopAdcGapDebug durations;
+	bool lateAdc = false;
+	if (m_previousLoopEndNt != 0) {
+		m_sinceLastAdc.outsideLoopUs += NT2US(nowNt - m_previousLoopEndNt);
+	}
 
 	auto elapsedSinceLastLoop = m_stallTimer.getElapsedSecondsAndReset(nowNt);
 	if (elapsedSinceLastLoop > 0.1) {
@@ -47,12 +64,43 @@ void MainLoop::PeriodicTask(efitick_t nowNt) {
 
 #if HAL_USE_ADC
 	if (p & ADC_UPDATE_RATE) {
+		if (m_previousAdcStartNt != 0) {
+			auto gapUs = NT2US(nowNt - m_previousAdcStartNt);
+			if (gapUs > 10000) {
+				// Snapshot every iteration since the previous ADC start. Core8
+				// normally has two main-loop iterations per ADC update.
+				auto count = s_lastAdcGap.count + 1;
+				s_lastAdcGap = m_sinceLastAdc;
+				s_lastAdcGap.count = count;
+				s_lastAdcGap.gapUs = gapUs;
+				if (s_lastAdcGap.previousSlowCallbackUs != 0) {
+					auto modules = getSlowCallbackModuleDebug();
+					s_lastAdcGap.slowModuleTotalUs = modules.totalUs;
+					for (int i = 0; i < 3; i++) {
+						s_lastAdcGap.slowModuleTopIndex[i] = modules.topIndex[i];
+						s_lastAdcGap.slowModuleTopUs[i] = modules.topUs[i];
+					}
+				}
+				lateAdc = true;
+			}
+		}
+		m_previousAdcStartNt = nowNt;
+		m_sinceLastAdc = {};
+		auto adcStartNt = getTimeNowNt();
 		updateSlowAdc(nowNt);
+		durations.previousAdcUs = NT2US(getTimeNowNt() - adcStartNt);
+		if (lateAdc) {
+#if ENABLE_PERF_TRACE
+			perfEventInstantGlobal(PE::SlowAdcGap);
+			perfTraceFreezeOnSlowAdcGap();
+#endif
+		}
 	}
 #endif // HAL_USE_ADC
 
 #if EFI_ELECTRONIC_THROTTLE_BODY
 	if (p & ETB_UPDATE_RATE) {
+		auto etbStartNt = getTimeNowNt();
 		for (int i = 0; i < ETB_COUNT; i++) {
 			auto etb = engine->etbControllers[i];
 
@@ -60,16 +108,29 @@ void MainLoop::PeriodicTask(efitick_t nowNt) {
 				etb->update();
 			}
 		}
+		durations.previousEtbUs = NT2US(getTimeNowNt() - etbStartNt);
 	}
 #endif // EFI_ELECTRONIC_THROTTLE_BODY
 
 	if (p & SLOW_CALLBACK_RATE) {
+		auto slowStartNt = getTimeNowNt();
 		doPeriodicSlowCallback();
+		durations.previousSlowCallbackUs = NT2US(getTimeNowNt() - slowStartNt);
 	}
 
 	if (p & FAST_CALLBACK_RATE) {
+		auto fastStartNt = getTimeNowNt();
 		engine->periodicFastCallback();
+		durations.previousFastCallbackUs = NT2US(getTimeNowNt() - fastStartNt);
 	}
+	m_previousLoopEndNt = getTimeNowNt();
+	m_sinceLastAdc.previousWorkUs += NT2US(m_previousLoopEndNt - nowNt);
+	m_sinceLastAdc.previousAdcUs = std::max(m_sinceLastAdc.previousAdcUs, durations.previousAdcUs);
+	m_sinceLastAdc.previousEtbUs = std::max(m_sinceLastAdc.previousEtbUs, durations.previousEtbUs);
+	m_sinceLastAdc.previousSlowCallbackUs =
+		std::max(m_sinceLastAdc.previousSlowCallbackUs, durations.previousSlowCallbackUs);
+	m_sinceLastAdc.previousFastCallbackUs =
+		std::max(m_sinceLastAdc.previousFastCallbackUs, durations.previousFastCallbackUs);
 }
 
 template <LoopPeriod flag>

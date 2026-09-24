@@ -65,6 +65,9 @@ public class Entry {
             long firstTimeStamp = 0;
             for (int i = 0; i < packet.length - 1; i += 8) {
                 byte type = is.readByte();
+                if (type == 0) {
+                    break; // unused tail of a trace stopped before the buffer filled
+                }
                 byte phase = is.readByte();
                 int isr = is.readByte() & 0xFF;
                 int thread = is.readByte() & 0xFF;

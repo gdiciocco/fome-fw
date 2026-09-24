@@ -1,5 +1,23 @@
 #pragma once
 
+#include <cstdint>
+
+struct MainLoopAdcGapDebug {
+	uint32_t count = 0;
+	uint32_t gapUs = 0;
+	uint32_t previousWorkUs = 0;
+	uint32_t outsideLoopUs = 0;
+	uint32_t previousAdcUs = 0;
+	uint32_t previousEtbUs = 0;
+	uint32_t previousSlowCallbackUs = 0;
+	uint32_t previousFastCallbackUs = 0;
+	uint32_t slowModuleTotalUs = 0;
+	uint32_t slowModuleTopIndex[3] = {};
+	uint32_t slowModuleTopUs[3] = {};
+};
+
+MainLoopAdcGapDebug getMainLoopAdcGapDebug();
+
 void initMainLoop();
 
 enum class LoopPeriod : uint8_t {

@@ -342,4 +342,21 @@ struct_no_prefix output_channels_s
 	uint32_t slowAdcGapOver10msCount;ADC: Gaps over 10ms;"",1, 0, 0, 0, 0
 	uint32_t slowAdcMaxConversionUs;ADC: Max conversion time;"us",1, 0, 0, 0, 0
 	uint32_t slowAdcConversionOver10msCount;ADC: Conversions over 10ms;"",1, 0, 0, 0, 0
+
+! Snapshot of all main-loop iterations between slow ADC updates when a gap exceeds 10ms.
+	uint32_t adcGapDebugCount;ADC gap: Events;"",1, 0, 0, 0, 0
+	uint32_t adcGapDebugGapUs;ADC gap: Last gap;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugWorkUs;ADC gap: Loop work total;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugOutsideUs;ADC gap: Outside loop total;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugAdcUs;ADC gap: Longest ADC work;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugEtbUs;ADC gap: Longest ETB work;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugSlowUs;ADC gap: Longest slow callback;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugFastUs;ADC gap: Longest fast callback;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModuleTotalUs;ADC gap: Module work total;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule1Index;ADC gap: Slow module 1 index;"",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule1Us;ADC gap: Slow module 1 time;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule2Index;ADC gap: Slow module 2 index;"",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule2Us;ADC gap: Slow module 2 time;"us",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule3Index;ADC gap: Slow module 3 index;"",1, 0, 0, 0, 0
+	uint32_t adcGapDebugModule3Us;ADC gap: Slow module 3 time;"us",1, 0, 0, 0, 0
 end_struct

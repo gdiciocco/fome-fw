@@ -55,6 +55,11 @@ public class EnumNames {
 	"VvtHandleShaftSignal",
 	"WifiSpi",
 	"WifiHandleEvents",
-	"Idle"
+	"Idle",
+	"SlowAdcGap",
+	"SlowCallbackSensors",
+	"SlowCallbackModules",
+	"SlowCallbackTle8888",
+	"SlowCallbackBaro"
 	};
 }

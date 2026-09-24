@@ -84,7 +84,8 @@ CanTxMessage::~CanTxMessage() {
 				m_frame.data8[7]);
 	}
 
-	// safe to block since each bus has its own TX thread
+	// This can block for 10 ms. Keep periodic callers in the CAN TX threads
+	// so a full mailbox cannot stall the main loop.
 	msg_t msg = canTransmit(device, CAN_ANY_MAILBOX, &m_frame, TIME_MS2I(10));
 #if EFI_TUNER_STUDIO
 	if (msg == MSG_OK) {

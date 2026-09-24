@@ -578,12 +578,30 @@ int TunerStudio::handleCrcCommand(TsChannelBase* tsChannel, uint8_t* data, int i
 #endif /* EFI_TOOTH_LOGGER */
 #if ENABLE_PERF_TRACE
 		case TS_PERF_TRACE_BEGIN:
-			perfTraceEnable();
-			sendOkResponse(tsChannel);
+			// A one-byte payload of 1 arms the rolling ADC-gap flight recorder.
+			// A command without payload retains the ordinary one-shot trace.
+			if (incomingPacketSize == 2 && data[0] == 1) {
+				if (perfTraceArmSlowAdcGap()) {
+					sendOkResponse(tsChannel);
+				} else {
+					sendErrorCode(tsChannel, TS_RESPONSE_OUT_OF_RANGE);
+				}
+			} else {
+				perfTraceEnable();
+				sendOkResponse(tsChannel);
+			}
 			break;
 		case TS_PERF_TRACE_GET_BUFFER: {
+			if (perfTraceAdcGapPending()) {
+				sendErrorCode(tsChannel, TS_RESPONSE_OUT_OF_RANGE);
+				break;
+			}
 			auto trace = perfTraceGetBuffer();
-			tsChannel->writeCrcPacketLocked(trace.get<uint8_t>(), trace.size());
+			if (trace) {
+				tsChannel->writeCrcPacketLocked(trace.get<uint8_t>(), trace.size());
+			} else {
+				sendErrorCode(tsChannel, TS_RESPONSE_OUT_OF_RANGE);
+			}
 		}
 
 		break;

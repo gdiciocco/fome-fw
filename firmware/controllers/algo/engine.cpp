@@ -46,6 +46,12 @@
 extern WaveChart waveChart;
 #endif /* EFI_ENGINE_SNIFFER */
 
+static SlowCallbackModuleDebug s_lastSlowCallbackModuleDebug;
+
+SlowCallbackModuleDebug getSlowCallbackModuleDebug() {
+	return s_lastSlowCallbackModuleDebug;
+}
+
 void Engine::resetEngineSnifferIfInTestMode() {
 #if EFI_ENGINE_SNIFFER
 	if (isFunctionalTestMode) {
@@ -84,7 +90,10 @@ void Engine::periodicSlowCallback() {
 #endif // EFI_SHAFT_POSITION_INPUT
 
 	efiWatchdog();
-	updateSlowSensors();
+	{
+		ScopePerf perf(PE::SlowCallbackSensors);
+		updateSlowSensors();
+	}
 	updateWidebandAliveTimers();
 	checkShutdown();
 
@@ -101,15 +110,48 @@ void Engine::periodicSlowCallback() {
 
 	updateGppwm();
 
-	engine->engineModules.apply_all([](auto& m) { m.onSlowCallback(); });
+	{
+		ScopePerf perf(PE::SlowCallbackModules);
+#if defined(CORE8_ADC_GAP_TRACE)
+		SlowCallbackModuleDebug moduleDebug;
+		uint32_t moduleIndex = 0;
+		engine->engineModules.apply_all([&](auto& m) {
+			auto startNt = getTimeNowNt();
+			m.onSlowCallback();
+			uint32_t elapsedUs = NT2US(getTimeNowNt() - startNt);
+			moduleDebug.totalUs += elapsedUs;
+			for (int rank = 0; rank < 3; rank++) {
+				if (elapsedUs > moduleDebug.topUs[rank]) {
+					for (int shift = 2; shift > rank; shift--) {
+						moduleDebug.topUs[shift] = moduleDebug.topUs[shift - 1];
+						moduleDebug.topIndex[shift] = moduleDebug.topIndex[shift - 1];
+					}
+					moduleDebug.topUs[rank] = elapsedUs;
+					moduleDebug.topIndex[rank] = moduleIndex;
+					break;
+				}
+			}
+			moduleIndex++;
+		});
+		s_lastSlowCallbackModuleDebug = moduleDebug;
+#else
+		engine->engineModules.apply_all([](auto& m) { m.onSlowCallback(); });
+#endif
+	}
 
 #if (BOARD_TLE8888_COUNT > 0)
-	tle8888startup();
+	{
+		ScopePerf perf(PE::SlowCallbackTle8888);
+		tle8888startup();
+	}
 #endif
 
 #if EFI_PROD_CODE
 	void baroLps25Update();
-	baroLps25Update();
+	{
+		ScopePerf perf(PE::SlowCallbackBaro);
+		baroLps25Update();
+	}
 #endif // EFI_PROD_CODE
 
 	engineState.updateSplitInjection();

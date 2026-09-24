@@ -8,6 +8,9 @@
 
 #include "pch.h"
 
+#include <algorithm>
+#include <cstring>
+
 #ifndef ENABLE_PERF_TRACE
 #error ENABLE_PERF_TRACE must be defined!
 #endif
@@ -32,15 +35,16 @@ static_assert(sizeof(TraceEntry) == 8);
 
 #define TRACE_BUFFER_LENGTH (BIG_BUFFER_SIZE / sizeof(TraceEntry))
 
-// This buffer stores a trace - we write the full buffer once, then disable tracing
+// Ordinary traces stop when full; ADC gap traces overwrite the oldest records until triggered.
 static BigBufferHandle s_traceBuffer;
 static size_t s_nextIdx = 0;
 
 static bool s_isTracing = false;
+static bool s_isArmedForAdcGap = false;
+static bool s_traceWrapped = false;
 
 static void stopTrace() {
 	s_isTracing = false;
-	s_nextIdx = 0;
 }
 
 static void perfEventImpl(PE event, EPhase phase) {
@@ -67,9 +71,14 @@ static void perfEventImpl(PE event, EPhase phase) {
 		uint32_t prim = __get_PRIMASK();
 		__disable_irq();
 
-		idx = s_nextIdx++;
-		if (s_nextIdx >= TRACE_BUFFER_LENGTH) {
-			stopTrace();
+		idx = s_nextIdx;
+		if (++s_nextIdx >= TRACE_BUFFER_LENGTH) {
+			if (s_isArmedForAdcGap) {
+				s_nextIdx = 0;
+				s_traceWrapped = true;
+			} else {
+				stopTrace();
+			}
 		}
 
 		// Restore previous interrupt state - don't restore if they weren't enabled
@@ -112,9 +121,41 @@ void perfEventInstantGlobal(PE event) {
 	perfEventImpl(event, EPhase::InstantGlobal);
 }
 
-void perfTraceEnable() {
+static void prepareTrace() {
+	stopTrace();
+	s_traceBuffer = {};
 	s_traceBuffer = getBigBuffer(BigBufferUser::PerfTrace);
+	s_nextIdx = 0;
+	s_traceWrapped = false;
+	s_isArmedForAdcGap = false;
+}
+
+void perfTraceEnable() {
+	prepareTrace();
+	s_isTracing = static_cast<bool>(s_traceBuffer);
+}
+
+bool perfTraceArmSlowAdcGap() {
+	prepareTrace();
+	if (!s_traceBuffer) {
+		return false;
+	}
+
+	std::memset(s_traceBuffer.get<uint8_t>(), 0, s_traceBuffer.size());
+	s_isArmedForAdcGap = true;
 	s_isTracing = true;
+	return true;
+}
+
+void perfTraceFreezeOnSlowAdcGap() {
+	if (s_isTracing && s_isArmedForAdcGap) {
+		stopTrace();
+		s_isArmedForAdcGap = false;
+	}
+}
+
+bool perfTraceAdcGapPending() {
+	return s_isArmedForAdcGap;
 }
 
 static inline uint32_t ticksToNs(uint32_t ticks) {
@@ -125,15 +166,35 @@ static inline uint32_t ticksToNs(uint32_t ticks) {
 const BigBufferHandle perfTraceGetBuffer() {
 	// stop tracing if you try to get the buffer early
 	stopTrace();
+	s_isArmedForAdcGap = false;
 
-	auto timestampOffset = s_traceBuffer.get<TraceEntry>()[0].Timestamp;
+	if (!s_traceBuffer) {
+		return {};
+	}
 
-	for (size_t i = 0; i < TRACE_BUFFER_LENGTH; i++) {
-		auto& entry = s_traceBuffer.get<TraceEntry>()[i];
+	auto entries = s_traceBuffer.get<TraceEntry>();
+	if (s_traceWrapped) {
+		// The oldest record is at s_nextIdx. Return records in time order for the
+		// existing trace decoder, which expects a linear buffer.
+		std::rotate(entries, entries + s_nextIdx, entries + TRACE_BUFFER_LENGTH);
+	}
+	const size_t validEntries = s_traceWrapped ? TRACE_BUFFER_LENGTH : s_nextIdx;
+	if (validEntries == 0) {
+		return efi::move(s_traceBuffer);
+	}
+
+	auto timestampOffset = entries[0].Timestamp;
+
+	for (size_t i = 0; i < validEntries; i++) {
+		auto& entry = entries[i];
 
 		// Remove offset and convert ticks -> nanoseconds
 		// (first entry will be zero timestamp)
 		entry.Timestamp = ticksToNs(entry.Timestamp - timestampOffset);
+	}
+	// Mark the unused tail so Entry.parseBuffer stops after the valid records.
+	if (validEntries < TRACE_BUFFER_LENGTH) {
+		std::memset(entries + validEntries, 0, (TRACE_BUFFER_LENGTH - validEntries) * sizeof(TraceEntry));
 	}
 
 	// transfer ownership of the buffer to the caller
