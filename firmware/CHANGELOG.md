@@ -19,7 +19,6 @@ or
  -
 
 ### Fixed
- - Prevent stale trigger-scheduled events and overdwell callbacks from interfering with newer ignition cycles after stop/restart or trigger reconfiguration; keep HPFP shutdown timers from restarting an old scheduling chain
  - 
 
 ### Removed
@@ -57,6 +56,8 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Use explicit trigger queue membership and tail pointers for constant-time insertion and unqueued-event cancellation
+ - Prevent stale trigger-scheduled events and overdwell callbacks from interfering with newer ignition cycles after stop/restart or trigger reconfiguration; keep HPFP shutdown timers from restarting an old scheduling chain
  - EMP pump CAN commands now run in the selected bus's TX thread, so a full CAN mailbox cannot stall the main loop. Configuration changes wait for old-endpoint commands to leave the software queue.
  - Shock preload status polling now runs in the CAN TX thread, preventing a full CAN mailbox from delaying CLT and IAT updates.
  - Fixed board settings are now greyed out throughout TunerStudio, including the full pinout pages, and protected when loading tunes. This prevents CRC errors caused by editing values that the ECU immediately restores. Hardware revision dependent settings remain editable where the board permits them.
