@@ -19,6 +19,7 @@ or
  -
 
 ### Fixed
+ - Prevent stale trigger-scheduled events and overdwell callbacks from interfering with newer ignition cycles after stop/restart or trigger reconfiguration; keep HPFP shutdown timers from restarting an old scheduling chain
  - 
 
 ### Removed
