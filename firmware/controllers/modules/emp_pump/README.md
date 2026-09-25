@@ -23,8 +23,8 @@ The pump and ECU must share CAN ground and the bus must be terminated in the
 normal way. The module does not change the configured CAN bitrate. FOME CAN
 read and write must both remain enabled.
 
-The shock-preload controller can share `Bus0`: it uses standard identifiers
-`0x720` through `0x722`, while EMP traffic uses extended J1939 identifiers.
+The shock-preload controller uses `Bus1` / CAN2 with standard identifiers
+`0x720` through `0x722`, separate from EMP's default `Bus0` / CAN1.
 
 ## Protocol
 

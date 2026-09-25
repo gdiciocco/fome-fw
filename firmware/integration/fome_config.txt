@@ -685,7 +685,7 @@ bit is_enabled_spi_2
 	bit is_enabled_spi_3
 	bit isSdCardEnabled;enable sd/disable sd
 	bit rusefiVerbose29b,"29 bit","11 bit";Use 11 bit (standard) or 29 bit (extended) IDs for FOME verbose CAN format.
-	bit enableShockPreload;Enable the Caponord electronic shock preload controller on primary CAN (standard IDs 0x720-0x722).
+	bit enableShockPreload;Enable the Caponord electronic shock preload controller on secondary CAN (CAN2, standard IDs 0x720-0x722).
 	bit enableEmpPump;Enable the Caponord EMP coolant pump controller. The pump is disabled by default.
 	bit useStepperIdle;This setting should only be used if you have a stepper motor idle valve and a stepper motor driver installed.
 	

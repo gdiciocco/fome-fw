@@ -66,12 +66,14 @@ void CanWrite::PeriodicTask(efitick_t) {
 	// Dashboard messages are all hardcoded to Bus0
 	if (m_bus == CanBusIndex::Bus0) {
 		updateDash(cycle);
+	}
 #if defined(MODULE_SHOCK_PRELOAD)
+	if (m_bus == ShockPreload::Bus) {
 		// CAN transmission can wait for a free mailbox. Keep the preload status
 		// request on the CAN TX thread instead of blocking the main loop.
 		engine->module<ShockPreload>()->pollStatus();
-#endif
 	}
+#endif
 
 #if EFI_WIDEBAND_FIRMWARE_UPDATE
 	if (engineConfiguration->widebandMode == WidebandMode::FOMEInternal && cycle.isInterval(CI::_50ms)) {

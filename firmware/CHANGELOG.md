@@ -30,6 +30,9 @@ or
 
 ## Unreleased
 
+### Breaking Changes
+ - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
+
 ### Added
  - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
   - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.

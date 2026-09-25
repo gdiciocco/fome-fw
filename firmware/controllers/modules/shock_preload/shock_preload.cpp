@@ -7,6 +7,8 @@
 namespace {
 // Commands use a fixed-size payload; unused bytes remain zero-initialized.
 constexpr uint8_t CommandFrameDlc = 8;
+constexpr uint32_t StatusPollIntervalMs = 1000;
+constexpr float OnlineTimeoutSeconds = 3.0f;
 
 constexpr uint8_t readU8Percent(uint8_t value) {
 	return std::min<uint8_t>(value, 100);
@@ -44,7 +46,7 @@ bool ShockPreload::isEnabled() const {
 }
 
 bool ShockPreload::acceptFrame(CanBusIndex busIndex, const CANRxFrame& frame) const {
-	if (!isEnabled() || busIndex != CanBusIndex::Bus0 || isExtendedFrame(frame) || frame.DLC < 8) {
+	if (!isEnabled() || busIndex != Bus || isExtendedFrame(frame) || frame.DLC < 8) {
 		return false;
 	}
 
@@ -84,7 +86,7 @@ void ShockPreload::decodeFrame(const CANRxFrame& frame, efitick_t nowNt) {
 }
 
 bool ShockPreload::isOnline() const {
-	return isEnabled() && !m_lastRxTimer.hasElapsedSec(1.0f);
+	return isEnabled() && !m_lastRxTimer.hasElapsedSec(OnlineTimeoutSeconds);
 }
 
 bool ShockPreload::isAtSavedPreset() const {
@@ -119,7 +121,7 @@ void ShockPreload::pollStatus() {
 		return;
 	}
 
-	if (m_pollTimer.hasElapsedMs(100)) {
+	if (m_pollTimer.hasElapsedMs(StatusPollIntervalMs)) {
 		sendSimpleCommand(CommandRequestStatus);
 		m_pollTimer.reset();
 	}
@@ -131,7 +133,7 @@ void ShockPreload::sendSimpleCommand(uint8_t command) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, Bus, false);
 	msg[0] = command;
 #else
 	(void)command;
@@ -144,7 +146,7 @@ void ShockPreload::sendValueCommand(uint8_t command, uint16_t value) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, Bus, false);
 	msg[0] = command;
 	msg[1] = value & 0xff;
 	msg[2] = value >> 8;
@@ -160,7 +162,7 @@ void ShockPreload::sendRelativeCommand(int16_t value) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, Bus, false);
 	msg[0] = CommandMoveRelative;
 	msg[1] = static_cast<uint16_t>(value) & 0xff;
 	msg[2] = static_cast<uint16_t>(value) >> 8;
@@ -175,7 +177,7 @@ void ShockPreload::sendPresetCommand(uint8_t command, uint8_t slot) {
 	}
 
 #if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(CommandId, CommandFrameDlc, CanBusIndex::Bus0, false);
+	CanTxMessage msg(CommandId, CommandFrameDlc, Bus, false);
 	msg[0] = command;
 	msg[1] = slot;
 #else

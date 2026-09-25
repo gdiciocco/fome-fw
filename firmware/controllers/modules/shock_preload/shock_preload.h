@@ -12,6 +12,7 @@
 class ShockPreload final : public EngineModule, public CanListener {
 public:
 	ShockPreload();
+	static constexpr CanBusIndex Bus = CanBusIndex::Bus1;
 
 	void initNoConfiguration() override;
 	void pollStatus();
