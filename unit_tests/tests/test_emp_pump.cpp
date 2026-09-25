@@ -42,7 +42,7 @@ public:
 		data[0] = d0;
 		data[1] = d1;
 		data[2] = d2;
-		if (count < 8) {
+		if (count < 16) {
 			ids[count] = id;
 			controls[count] = d0;
 			buses[count] = bus;
@@ -57,9 +57,9 @@ public:
 	bool lastExtended = false;
 	CanBusIndex lastBus = CanBusIndex::Bus1;
 	uint8_t data[3] = {};
-	uint32_t ids[8] = {};
-	uint8_t controls[8] = {};
-	CanBusIndex buses[8] = {};
+	uint32_t ids[16] = {};
+	uint8_t controls[16] = {};
+	CanBusIndex buses[16] = {};
 	int count = 0;
 };
 
@@ -107,10 +107,13 @@ TEST(EmpPump, ServiceTestUsesExtendedCommandAndIsSafeByDefault) {
 
 	// Apply configuration first: a burn resets runtime telemetry and any prior service request.
 	dut.onSlowCallback();
+	dut.pollTx(CanBusIndex::Bus0);
 	tx.count = 0;
 	EXPECT_TRUE(dut.handleServiceCommand(EmpPumpServiceCommand::Start));
 	advanceTimeUs(100000);
 	dut.onSlowCallback();
+	EXPECT_EQ(0, tx.count);
+	dut.pollTx(CanBusIndex::Bus0);
 
 	EXPECT_EQ(1, tx.count);
 	EXPECT_EQ(CommandId, tx.lastId);
@@ -125,8 +128,42 @@ TEST(EmpPump, ServiceTestUsesExtendedCommandAndIsSafeByDefault) {
 	EXPECT_TRUE(dut.handleServiceCommand(EmpPumpServiceCommand::Stop));
 	advanceTimeUs(100000);
 	dut.onSlowCallback();
+	dut.pollTx(CanBusIndex::Bus0);
 	EXPECT_EQ(2, tx.count);
 	EXPECT_EQ(0xFC, tx.data[0]);
+
+	setCanTxMockHandler(nullptr);
+}
+
+TEST(EmpPump, FullTxQueueDoesNotSendFromSlowCallback) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	EmpPump dut;
+	auto empConfig = validConfig();
+	empConfig.rampRpmPerSecond = 0;
+	dut.setConfiguration(empConfig);
+	EmpPumpTxMock tx;
+	setCanTxMockHandler(&tx);
+
+	dut.onSlowCallback();
+	for (int i = 0; i < 12; i++) {
+		ASSERT_TRUE(dut.handleServiceCommand(EmpPumpServiceCommand::Start, 2000 + i * 100, 5));
+		advanceTimeUs(100000);
+		dut.onSlowCallback();
+	}
+	EXPECT_EQ(0, tx.count);
+	EXPECT_EQ(EmpPumpState::ServiceTest, dut.getStatus().state);
+	EXPECT_EQ(3100, dut.getStatus().targetRpm);
+	EXPECT_NE(0, dut.getStatus().faults & EmpPumpFaultTx);
+	EXPECT_GT(dut.getStatus().transmitFailureCount, 0);
+
+	for (int i = 0; i < 8; i++) dut.pollTx(CanBusIndex::Bus0);
+	EXPECT_EQ(8, tx.count);
+	advanceTimeUs(100000);
+	dut.onSlowCallback();
+	dut.pollTx(CanBusIndex::Bus0);
+	EXPECT_EQ(9, tx.count);
+	EXPECT_EQ(0x38, tx.data[1]); // Latest target: 3100 RPM * 2.
+	EXPECT_EQ(0x18, tx.data[2]);
 
 	setCanTxMockHandler(nullptr);
 }
@@ -155,6 +192,8 @@ TEST(EmpPump, BurnReleasesPowerHoldOnOldEndpoint) {
 	setCanTxMockHandler(&tx);
 	dut.setConfiguration(empConfig);
 	dut.onSlowCallback();
+	EXPECT_EQ(0, tx.count);
+	dut.pollTx(CanBusIndex::Bus0);
 	ASSERT_GE(tx.count, 1);
 	EXPECT_EQ(CommandId, tx.ids[tx.count - 1]);
 	EXPECT_EQ(0xF5, tx.controls[tx.count - 1]);
@@ -163,14 +202,21 @@ TEST(EmpPump, BurnReleasesPowerHoldOnOldEndpoint) {
 	empConfig.controllerAddress = 0x97;
 	empConfig.sourceAddress = 0xA4;
 	dut.setConfiguration(empConfig);
-	// Burn only publishes a mailbox: RX remains on the old endpoint until the
-	// slow owner sends F0. This is the ordering guarantee needed for F5.
+	// Burn only publishes a mailbox: RX remains on the old endpoint until F0
+	// has left the software TX queue on the old bus.
 	EXPECT_TRUE(dut.acceptFrame(CanBusIndex::Bus0, status1Frame()));
 	dut.onSlowCallback();
+	EXPECT_EQ(1, tx.count);
+	EXPECT_TRUE(dut.acceptFrame(CanBusIndex::Bus0, status1Frame()));
+	dut.pollTx(CanBusIndex::Bus1);
+	EXPECT_EQ(1, tx.count);
+	dut.pollTx(CanBusIndex::Bus0);
 	ASSERT_GE(tx.count, 2);
 	EXPECT_EQ(CommandId, tx.ids[1]);
 	EXPECT_EQ(CanBusIndex::Bus0, tx.buses[1]);
 	EXPECT_EQ(0xF0, tx.controls[1]);
+	dut.onSlowCallback();
+	dut.pollTx(CanBusIndex::Bus1);
 	// Emulate a Bus0 frame that was accepted before the switch but reaches
 	// decode afterward. It must not publish old-generation telemetry.
 	dut.decodeFrame(CanBusIndex::Bus0, status1Frame(), getTimeNowNt());
@@ -185,6 +231,44 @@ TEST(EmpPump, BurnReleasesPowerHoldOnOldEndpoint) {
 	for (int i = 2; i < tx.count && i < 8; i++) {
 		EXPECT_EQ(CanBusIndex::Bus1, tx.buses[i]);
 	}
+	setCanTxMockHandler(nullptr);
+}
+
+TEST(EmpPump, BurnWaitsForFullOldBusQueueBeforeSwitching) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	EmpPump dut;
+	auto empConfig = validConfig();
+	empConfig.hotBootRecovery = true;
+	empConfig.rampRpmPerSecond = 0;
+	Sensor::setMockValue(SensorType::Clt, 105);
+	Sensor::setMockValue(SensorType::BatteryVoltage, 13);
+	EmpPumpTxMock tx;
+	setCanTxMockHandler(&tx);
+	dut.setConfiguration(empConfig);
+	dut.onSlowCallback();
+	for (int i = 0; i < 7; i++) {
+		advanceTimeUs(500000);
+		dut.onSlowCallback();
+	}
+	EXPECT_EQ(0, tx.count);
+
+	empConfig.canBus = 1;
+	empConfig.controllerAddress = 0x97;
+	dut.setConfiguration(empConfig);
+	dut.onSlowCallback();
+	EXPECT_TRUE(dut.acceptFrame(CanBusIndex::Bus0, status1Frame()));
+	EXPECT_EQ(0, tx.count);
+	dut.pollTx(CanBusIndex::Bus0);
+	dut.onSlowCallback();
+	EXPECT_TRUE(dut.acceptFrame(CanBusIndex::Bus0, status1Frame()));
+	for (int i = 0; i < 8; i++) dut.pollTx(CanBusIndex::Bus0);
+	ASSERT_EQ(9, tx.count);
+	EXPECT_EQ(0xF0, tx.controls[8]);
+	EXPECT_EQ(CanBusIndex::Bus0, tx.buses[8]);
+	dut.onSlowCallback();
+	EXPECT_FALSE(dut.acceptFrame(CanBusIndex::Bus0, status1Frame()));
+	dut.pollTx(CanBusIndex::Bus1);
+	EXPECT_EQ(CanBusIndex::Bus1, tx.lastBus);
 	setCanTxMockHandler(nullptr);
 }
 

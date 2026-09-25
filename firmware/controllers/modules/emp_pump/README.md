@@ -59,8 +59,9 @@ An off command uses `0xFFFF` in the speed bytes. The first command byte is:
 | `0xF1` | Forward operation, release Power Hold |
 | `0xF5` | Forward operation, request Power Hold |
 
-The regulator runs at 10 Hz. A changed command is transmitted immediately and
-is repeated every 500 ms as a heartbeat.
+The regulator runs at 10 Hz. A changed command is queued on the next slow
+callback and repeated every 500 ms as a heartbeat. The selected bus's CAN TX
+thread transmits queued commands.
 
 ## Operating states
 
@@ -140,10 +141,10 @@ independent ignition/key signal. Do not enable firmware main-relay control from
 the measured battery voltage alone: depending on the wiring, that can create a
 self-holding relay latch.
 
-When a Burn disables EMP or changes its CAN bus/address after `0xF5` was sent,
-the slow-control owner first sends `0xF0` on the old endpoint. Only then does it
-publish the new receive endpoint. This prevents Power Hold from remaining
-latched on the old controller address.
+When a Burn disables EMP or changes its CAN bus/address after `0xF5` was queued,
+the slow-control owner queues `0xF0` on the old endpoint and waits for the old
+software TX queue to drain. Only then does it publish the new receive endpoint.
+This preserves command ordering across a bus or address change.
 
 ## TunerStudio setup
 
@@ -179,18 +180,20 @@ TunerStudio exposes:
   time;
 - latched, controller, sensor, timeout, capacity, and overload faults.
 
-`EmpPumpFaultTx` is not raised by production code because FOME's current CAN
-transmit API does not return a per-frame completion result. Global CAN failure
-counters are shared with other modules and are deliberately not used as an
-EMP-specific approximation. `reportTransmitResult()` remains as a future
-driver hook and for deterministic testing.
+`EmpPumpFaultTx` is raised if the software TX queue fills. FOME's current CAN
+transmit API does not return a per-frame completion result, so this fault does
+not report hardware transmission failure. Global CAN failure counters are
+shared with other modules and are not used as an EMP-specific approximation.
+`reportTransmitResult()` remains as a future driver hook and for testing.
 
 ## Threading model
 
 The slow engine callback is the sole owner of regulator state and CAN command
-transmission. Configuration changes, service commands, ignition changes,
-engine-stop notification, and optional TX results arrive through atomic
-mailboxes.
+framing. It submits commands to a bounded queue per bus without waiting for a
+CAN mailbox; each bus's CAN TX thread performs the potentially blocking send.
+When a queue is full, the slow callback retries on its next pass. Configuration
+changes, service commands, ignition changes, engine-stop notification, and
+optional TX results arrive through atomic mailboxes.
 
 CAN1 and CAN2 each have their own receive thread, so EMP maintains one
 single-writer telemetry mailbox per bus. A received frame captures the active
@@ -198,7 +201,7 @@ endpoint and configuration generation and rechecks both before publishing.
 Frames accepted just before a bus/address change therefore cannot populate the
 new generation. Live status and the active configuration are published through
 bounded sequence snapshots; no cross-priority spinlock is used and no CAN
-transmission occurs while holding a lock.
+transmission occurs on the main loop.
 
 ## Configuration migration
 

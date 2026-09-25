@@ -41,8 +41,8 @@ enum class EmpPumpThermalState : uint8_t {
 
 enum EmpPumpFault : uint16_t {
 	EmpPumpFaultStatusTimeout = 1 << 0,
-	// FOME's CanTxMessage does not expose a per-message TX result.  This bit is
-	// retained for API compatibility and can be set by reportTransmitResult().
+	// Software TX queue overflow or a failure reported by a future driver hook.
+	// CanTxMessage does not expose per-frame completion today.
 	EmpPumpFaultTx = 1 << 1,
 	EmpPumpFaultCltInvalid = 1 << 2,
 	EmpPumpFaultBatteryLow = 1 << 3,
@@ -214,6 +214,7 @@ public:
 	void initNoConfiguration() override;
 	void onConfigurationChange(engine_configuration_s const* previousConfig) override;
 	void onSlowCallback() override;
+	void pollTx(CanBusIndex bus);
 	void onEngineStop() override;
 	void onIgnitionStateChanged(bool ignitionOn) override;
 	bool needsDelayedShutoff() override;
@@ -270,6 +271,19 @@ private:
 		bool mainStatusSeen = false;
 	};
 
+	struct TxCommand {
+		uint32_t id = 0;
+		uint16_t rawSpeed = 0xffff;
+		uint8_t control = 0;
+	};
+
+	static constexpr size_t TxQueueCapacity = 8;
+	struct TxQueue {
+		std::array<TxCommand, TxQueueCapacity> commands;
+		std::atomic<uint32_t> write{0};
+		std::atomic<uint32_t> read{0};
+	};
+
 	static constexpr uint32_t CommandBaseId = 0x18EF0000;
 	static constexpr uint32_t Status1BaseId = 0x18FF0300;
 	static constexpr uint32_t Status2BaseId = 0x18FF2300;
@@ -294,6 +308,9 @@ private:
 	void resetClosedLoopRuntime();
 	void sendCommandIfDue(uint32_t nowMs);
 	void transmitCommand(uint32_t nowMs);
+	bool queueTx(CanBusIndex bus, const TxCommand& command);
+	bool txQueueEmpty(CanBusIndex bus) const;
+	void recordTxQueueOverflow();
 	void setState(EmpPumpState state, uint32_t nowMs);
 	void decodeStatus1(RxTelemetry& telemetry, const CANRxFrame& frame, uint32_t nowMs);
 	void decodeStatus2(RxTelemetry& telemetry, const CANRxFrame& frame, uint32_t nowMs);
@@ -301,10 +318,10 @@ private:
 	bool isConfigSane() const;
 	static bool isConfigSane(const EmpPumpConfig& config);
 	bool isEnabled() const;
-	void releasePowerHold();
+	bool releasePowerHold();
 	void consumeServiceMailbox(uint32_t nowMs);
-	void consumeExternalMailboxes(uint32_t nowMs);
-	void applyConfiguration(const EmpPumpConfig& config, uint32_t sequence, uint32_t nowMs);
+	bool consumeExternalMailboxes(uint32_t nowMs);
+	bool applyConfiguration(const EmpPumpConfig& config, uint32_t sequence, uint32_t nowMs);
 	void publishStatus(uint32_t nowMs);
 	EmpPumpStatus readRxStatus(EmpPumpStatus status, uint32_t nowMs) const;
 	static uint32_t encodeEndpoint(const EmpPumpConfig& config);
@@ -328,6 +345,8 @@ private:
 	// coupled to mutable configuration; readers select only the active epoch.
 	std::atomic<uint32_t> m_activeRxGeneration{0};
 	std::array<EmpPumpSnapshotMailbox<RxTelemetry>, 2> m_rxMailboxes;
+	// The slow callback is the sole producer; each bus TX thread consumes its queue.
+	std::array<TxQueue, 2> m_txQueues;
 
 	EmpPumpState m_state = EmpPumpState::Disabled;
 	EmpPumpState m_previousState = EmpPumpState::Disabled;
@@ -357,6 +376,8 @@ private:
 	bool m_commandDirty = true;
 	bool m_powerHoldWanted = false;
 	bool m_powerHoldCommanded = false;
+	bool m_releaseQueued = false;
+	bool m_configurationTransitionPending = false;
 	bool m_filteredIatSeen = false;
 	bool m_slopeSampleSeen = false;
 	bool m_engineStopNotified = false;

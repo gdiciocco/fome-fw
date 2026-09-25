@@ -394,7 +394,10 @@ void EmpPump::onSlowCallback() {
 		m_rxEndpoint.store(encodeEndpoint(m_config), std::memory_order_release);
 		resetRuntime(now);
 	}
-	consumeExternalMailboxes(now);
+	if (!consumeExternalMailboxes(now)) {
+		publishStatus(now);
+		return;
+	}
 	consumeServiceMailbox(now);
 
 	// EngineModule slow callbacks run at approximately 20Hz: run the regulator
@@ -419,11 +422,14 @@ void EmpPump::onSlowCallback() {
 	publishStatus(now);
 }
 
-void EmpPump::consumeExternalMailboxes(uint32_t now) {
+bool EmpPump::consumeExternalMailboxes(uint32_t now) {
 	EmpPumpConfig nextConfig;
 	uint32_t sequence = 0;
+	bool configurationReady = !m_configurationTransitionPending;
 	if (m_configurationMailbox.tryRead(nextConfig, &sequence) && sequence != 0 && sequence != m_lastConfigurationSequence) {
-		applyConfiguration(nextConfig, sequence, now);
+		m_configurationTransitionPending = true;
+		configurationReady = applyConfiguration(nextConfig, sequence, now);
+		if (configurationReady) m_configurationTransitionPending = false;
 	}
 
 	if (m_engineStopMailbox.exchange(false, std::memory_order_acq_rel)) {
@@ -454,13 +460,16 @@ void EmpPump::consumeExternalMailboxes(uint32_t now) {
 		if (m_transmitFailureCount < UINT8_MAX) m_transmitFailureCount++;
 		m_commandDirty = true;
 	}
+	return configurationReady;
 }
 
-void EmpPump::applyConfiguration(const EmpPumpConfig& configuration, uint32_t sequence, uint32_t now) {
-	// This is the only place a running configuration changes. The F0 command
-	// is emitted on the old endpoint before accepting traffic or commands on
-	// the new one. No lock is held while CanTxMessage transmits.
-	releasePowerHold();
+bool EmpPump::applyConfiguration(const EmpPumpConfig& configuration, uint32_t sequence, uint32_t now) {
+	// Drain commands on the old endpoint, including F0 when Power Hold was
+	// requested, before accepting traffic or commands on the new endpoint.
+	// The slow callback skips control while this nonblocking transition waits.
+	if (!releasePowerHold() || !txQueueEmpty(static_cast<CanBusIndex>(m_config.canBus))) {
+		return false;
+	}
 	m_config = configuration;
 	m_activeConfigurationMailbox.publish(m_config);
 	m_activeConfigurationPublished.store(true, std::memory_order_release);
@@ -468,6 +477,7 @@ void EmpPump::applyConfiguration(const EmpPumpConfig& configuration, uint32_t se
 	resetRuntime(now);
 	m_activeRxGeneration.store(sequence, std::memory_order_release);
 	m_rxEndpoint.store(encodeEndpoint(m_config), std::memory_order_release);
+	return true;
 }
 
 void EmpPump::onEngineStop() {
@@ -507,6 +517,7 @@ void EmpPump::resetRuntime(uint32_t now) {
 	m_commandDirty = true;
 	m_powerHoldWanted = false;
 	m_powerHoldCommanded = false;
+	m_releaseQueued = false;
 	m_filteredIatSeen = false;
 	m_engineStopNotified = false;
 	m_controlInitialized = false;
@@ -847,27 +858,64 @@ void EmpPump::sendCommandIfDue(uint32_t now) {
 	transmitCommand(now);
 }
 
+bool EmpPump::queueTx(CanBusIndex bus, const TxCommand& command) {
+	const size_t busIndex = static_cast<size_t>(bus);
+	if (busIndex >= m_txQueues.size()) return false;
+	auto& queue = m_txQueues[busIndex];
+	const uint32_t write = queue.write.load(std::memory_order_relaxed);
+	const uint32_t read = queue.read.load(std::memory_order_acquire);
+	if (write - read >= TxQueueCapacity) return false;
+	queue.commands[write % TxQueueCapacity] = command;
+	queue.write.store(write + 1, std::memory_order_release);
+	return true;
+}
+
+bool EmpPump::txQueueEmpty(CanBusIndex bus) const {
+	const size_t busIndex = static_cast<size_t>(bus);
+	if (busIndex >= m_txQueues.size()) return true;
+	const auto& queue = m_txQueues[busIndex];
+	return queue.read.load(std::memory_order_acquire) == queue.write.load(std::memory_order_acquire);
+}
+
+void EmpPump::recordTxQueueOverflow() {
+	m_latchedFaults |= EmpPumpFaultTx;
+	if (m_transmitFailureCount < UINT8_MAX) m_transmitFailureCount++;
+}
+
+void EmpPump::pollTx(CanBusIndex bus) {
+	const size_t busIndex = static_cast<size_t>(bus);
+	if (busIndex >= m_txQueues.size()) return;
+	auto& queue = m_txQueues[busIndex];
+	const uint32_t read = queue.read.load(std::memory_order_relaxed);
+	if (read == queue.write.load(std::memory_order_acquire)) return;
+	const TxCommand command = queue.commands[read % TxQueueCapacity];
+#if EFI_CAN_SUPPORT || EFI_UNIT_TEST
+	{
+		CanTxMessage msg(command.id, 8, bus, true);
+		msg[0] = command.control;
+		msg[1] = command.rawSpeed & 0xff;
+		msg[2] = command.rawSpeed >> 8;
+		for (size_t i = 3; i < 8; i++) msg[i] = 0xff;
+	}
+#else
+	(void)command;
+#endif
+	// Keep the slot occupied until CanTxMessage has completed its send attempt.
+	// A configuration change can then use an empty queue as its ordering barrier.
+	queue.read.store(read + 1, std::memory_order_release);
+}
+
 void EmpPump::transmitCommand(uint32_t now) {
 	uint8_t control = ControlOff;
 	if (m_targetRpm > 0) {
 		control = m_powerHoldWanted && m_config.powerHoldEnabled ? ControlForwardPowerHoldOn : (m_powerHoldCommanded ? ControlForwardPowerHoldOff : ControlForward);
 	} else if (m_powerHoldCommanded) control = ControlOffPowerHoldOff;
 	const uint32_t id = CommandBaseId | (static_cast<uint32_t>(m_config.controllerAddress) << 8) | m_config.sourceAddress;
-#if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(id, 8, static_cast<CanBusIndex>(m_config.canBus), true);
-	msg[0] = control;
-	if (m_targetRpm > 0) {
-		const uint16_t raw = m_targetRpm * 2;
-		msg[1] = raw & 0xff;
-		msg[2] = raw >> 8;
-	} else {
-		msg[1] = 0xff;
-		msg[2] = 0xff;
+	const uint16_t rawSpeed = m_targetRpm > 0 ? m_targetRpm * 2 : 0xffff;
+	if (!queueTx(static_cast<CanBusIndex>(m_config.canBus), {id, rawSpeed, control})) {
+		recordTxQueueOverflow();
+		return;
 	}
-	for (size_t i = 3; i < 8; i++) msg[i] = 0xff;
-#else
-	(void)id;
-#endif
 	m_lastCommandControl = control;
 	if (control == ControlForwardPowerHoldOn) m_powerHoldCommanded = true;
 	else if (control == ControlOffPowerHoldOff || control == ControlForwardPowerHoldOff) m_powerHoldCommanded = false;
@@ -878,24 +926,15 @@ void EmpPump::transmitCommand(uint32_t now) {
 	if (m_targetRpm == 0) m_previousState = m_state;
 }
 
-void EmpPump::releasePowerHold() {
-	if (!m_powerHoldCommanded) {
-		return;
-	}
-
+bool EmpPump::releasePowerHold() {
+	if (!m_powerHoldCommanded || m_releaseQueued) return true;
 	const uint32_t oldId = CommandBaseId | (static_cast<uint32_t>(m_config.controllerAddress) << 8) | m_config.sourceAddress;
-#if EFI_CAN_SUPPORT || EFI_UNIT_TEST
-	CanTxMessage msg(oldId, 8, static_cast<CanBusIndex>(m_config.canBus), true);
-	msg[0] = ControlOffPowerHoldOff;
-	for (size_t i = 1; i < 8; i++) msg[i] = 0xff;
-#else
-	(void)oldId;
-#endif
-	m_lastCommandControl = ControlOffPowerHoldOff;
-	m_powerHoldCommanded = false;
-	m_powerHoldWanted = false;
-	m_commandDirty = true;
-	m_delayedShutoffRequested.store(false, std::memory_order_release);
+	if (!queueTx(static_cast<CanBusIndex>(m_config.canBus), {oldId, 0xffff, ControlOffPowerHoldOff})) {
+		recordTxQueueOverflow();
+		return false;
+	}
+	m_releaseQueued = true;
+	return true;
 }
 
 void EmpPump::consumeServiceMailbox(uint32_t now) {
