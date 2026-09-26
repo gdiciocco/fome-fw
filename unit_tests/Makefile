@@ -68,3 +68,5 @@ INCDIR += \
 
 
 include $(UNIT_TESTS_DIR)/unit_test_rules.mk
+
+include $(UNIT_TESTS_DIR)/adc_lifecycle/adc_lifecycle.mk

@@ -35,7 +35,8 @@ or
 
 ### Added
  - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
-  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
+ - Add `adc_stats` console diagnostics for fast ADC and software knock: conversion starts, completed buffers, skipped starts by reason, and ADC errors.
+ - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
  - SD card logs now contain every output channel (full parity with the TunerStudio log), rather than only a curated subset - previously-missing data like idle, throttle, wideband and wall-fuel state is now logged
@@ -63,7 +64,8 @@ or
  - Shock preload status polling now runs in the CAN TX thread, preventing a full CAN mailbox from delaying CLT and IAT updates.
  - Fixed board settings are now greyed out throughout TunerStudio, including the full pinout pages, and protected when loading tunes. This prevents CRC errors caused by editing values that the ECU immediately restores. Hardware revision dependent settings remain editable where the board permits them.
  - MC33816 initialization now respects the selected SPI bus. VVT applies its cranking RPM limit without changing the saved calibration.
-  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
+ - Prevent an ADC panic when fast ADC or software knock sampling overlaps the previous conversion's completion callback.
+ - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
  - STM32F7 dual-bank ECUs no longer stall (potentially stopping the engine) when burning configuration with the engine running - configuration is now committed to flash when the engine is stopped #776
  - SD card log field names now include their category prefix (e.g. `Boost: Target` instead of just `Target`), matching the names shown in TunerStudio
  - Injector and ignition circuit fault codes now name the correct cylinder on boards with smart driver chips. Cylinder 1 previously reported P0202/P0352 instead of P0201/P0351, cylinders 10-12 reported nonsense codes, and cylinder 12 reported no code at all
