@@ -262,6 +262,15 @@ static void scheduleSparkEvent(
 		EngPhase dwellAngle,
 		EngPhase sparkAngle,
 		const EnginePhaseInfo& phase) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (event.sparkEvent.scheduling.action) {
+		// A previous charge still owns this timer, possibly across sync loss or
+		// configuration reset. Let it discharge its outputs before reusing the
+		// event: replacing it could strand an old coil, while retaining it could
+		// leave the new charge without a fallback if the old timer fires first.
+		return;
+	}
+
 	float angleOffset = dwellAngle - phase.currentEngPhase;
 	if (angleOffset < 0) {
 		angleOffset += engine->engineState.engineCycle;
@@ -296,8 +305,7 @@ static void scheduleSparkEvent(
 	efiAssertVoid(ObdCode::CUSTOM_ERR_6591, !std::isnan(sparkAngle.angle), "findAngle#4");
 	assertAngleRange(sparkAngle.angle, "findAngle#a5", ObdCode::CUSTOM_ERR_6549);
 
-	// Keep registration of the fallback atomic with the event it protects.
-	chibios_rt::CriticalSectionLocker csl;
+	// Registration of the charge, spark and fallback is protected by the same lock.
 	bool scheduled = engine->module<TriggerScheduler>()->scheduleOrQueue(
 			&event.sparkEvent, sparkAngle, {fireSparkAndPrepareNextSchedule, ctx}, phase);
 
