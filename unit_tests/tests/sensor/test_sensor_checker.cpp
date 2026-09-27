@@ -70,6 +70,11 @@ TEST(SensorCheckerOil, InconsistentOilSensorsUseRangePerformanceDtcs) {
 	setupSensorCheckerPreconditions();
 	engine->module<SensorChecker>()->onSlowCallback();
 
+	EXPECT_FALSE(hasError(ObdCode::OBD_OilP_Timeout));
+	EXPECT_FALSE(hasError(ObdCode::OBD_OilT_Timeout));
+
+	runSensorChecks();
+
 	EXPECT_TRUE(hasError(ObdCode::OBD_OilP_Timeout));
 	EXPECT_TRUE(hasError(ObdCode::OBD_OilT_Timeout));
 	oilPressure.unregister();
