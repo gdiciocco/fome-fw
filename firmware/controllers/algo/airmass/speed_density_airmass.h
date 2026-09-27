@@ -10,8 +10,8 @@ public:
 
 	AirmassResult getAirmass(float rpm, bool postState) override;
 	AirmassResult getAirmass(float rpm, float map, bool postState);
-	AirmassEvaluation evaluateAirmass(float rpm) const;
-	AirmassEvaluation evaluateAirmass(float rpm, float map) const;
+	AirmassEvaluation evaluateAirmass(float rpm, AirmassDiagnostics* diagnostics = nullptr) const;
+	AirmassEvaluation evaluateAirmass(float rpm, float map, AirmassDiagnostics* diagnostics = nullptr) const;
 	float getVeImpl(float rpm, percent_t load) const override;
 	float getAirflow(float rpm, float map, bool postState);
 
@@ -19,5 +19,7 @@ public:
 	MapEvaluation evaluateMap(float rpm) const;
 
 private:
+	AirmassEvaluation evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const;
+	AirmassEvaluation evaluateAirmass(float rpm, float map, const DiagnosticsTarget& diagnostics) const;
 	const ValueProvider3D* const m_mapEstimationTable;
 };

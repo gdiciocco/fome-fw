@@ -3,14 +3,14 @@
 #include "alphan_airmass.h"
 
 AirmassResult AlphaNAirmass::getAirmass(float rpm, bool postState) {
-	auto evaluation = evaluateAirmass(rpm);
-	if (postState) {
-		publishEvaluation(evaluation);
-	}
-	return evaluation.Result;
+	return evaluateAirmass(rpm, DiagnosticsTarget(postState)).Result;
 }
 
-AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm) const {
+AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm, AirmassDiagnostics* diagnostics) const {
+	return evaluateAirmass(rpm, DiagnosticsTarget(diagnostics));
+}
+
+AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const {
 	AirmassEvaluation evaluation;
 	auto tps = Sensor::get(SensorType::Tps1);
 
@@ -20,8 +20,8 @@ AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm) const {
 	}
 
 	// In this case, VE directly describes the cylinder filling relative to the ideal
-	evaluateVe(rpm, tps.Value, evaluation.Ve);
-	float ve = evaluation.Ve.Ve * PERCENT_DIV;
+	auto veEvaluation = evaluateVe(rpm, tps.Value, diagnostics);
+	float ve = veEvaluation.Ve * PERCENT_DIV;
 
 	// optionally use real IAT instead of fixed air temperature
 	constexpr float standardIat = 20.0f; // std atmosphere temperature
@@ -36,7 +36,7 @@ AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm) const {
 			iatK);
 
 	evaluation.Result = {airmass, tps.Value};
-	evaluation.Valid = evaluation.Ve.Valid && std::isfinite(tps.Value) && std::isfinite(iatK) && iatK > 0 &&
+	evaluation.Valid = veEvaluation.Valid && std::isfinite(tps.Value) && std::isfinite(iatK) && iatK > 0 &&
 					   std::isfinite(airmass) && airmass >= 0;
 	return evaluation;
 }

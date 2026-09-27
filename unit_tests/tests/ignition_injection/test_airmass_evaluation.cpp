@@ -47,6 +47,12 @@ void expectSeededDiagnostics() {
 	}
 }
 
+void expectSameEvaluation(const AirmassEvaluation& left, const AirmassEvaluation& right) {
+	EXPECT_FLOAT_EQ(left.Result.CylinderAirmass, right.Result.CylinderAirmass);
+	EXPECT_FLOAT_EQ(left.Result.EngineLoadPercent, right.Result.EngineLoadPercent);
+	EXPECT_EQ(left.Valid, right.Valid);
+}
+
 struct TestIdleController : public MockIdleController {
 	bool isIdlingOrTaper() const override {
 		return true;
@@ -138,13 +144,56 @@ TEST(AirmassEvaluation, InvalidAlphaNTpsPreservesPublishedVeDiagnostics) {
 	ASSERT_FALSE(Sensor::get(SensorType::Tps1).Valid);
 	seedPublishedDiagnostics();
 
-	auto evaluation = dut.evaluateAirmass(1900);
+	AirmassDiagnostics diagnostics;
+	diagnostics.Ve.HasValue = true;
+	diagnostics.Ve.Valid = true;
+	diagnostics.Map.HasValue = true;
+	diagnostics.Map.Valid = true;
+	auto evaluation = dut.evaluateAirmass(1900, &diagnostics);
 	EXPECT_FALSE(evaluation.Valid);
-	EXPECT_FALSE(evaluation.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.Valid);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.Valid);
 
 	auto result = dut.getAirmass(1900, true);
 	EXPECT_FLOAT_EQ(result.CylinderAirmass, 0);
 	EXPECT_FLOAT_EQ(result.EngineLoadPercent, 100);
+	expectSeededDiagnostics();
+}
+
+TEST(AirmassEvaluation, AlphaNCaptureMatchesNoCaptureAndResetsOnFailure) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->displacement = 3.2f;
+	setCylinderCount(4);
+	Sensor::setMockValue(SensorType::Tps1, 18);
+
+	StrictMock<MockVp3d> veTable;
+	EXPECT_CALL(veTable, getValue(1900, 18)).Times(2).WillRepeatedly(Return(54));
+	AlphaNAirmass dut(&veTable);
+	seedPublishedDiagnostics();
+
+	auto withoutCapture = dut.evaluateAirmass(1900);
+	AirmassDiagnostics diagnostics;
+	auto withCapture = dut.evaluateAirmass(1900, &diagnostics);
+	expectSameEvaluation(withoutCapture, withCapture);
+	EXPECT_TRUE(withCapture.Valid);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	EXPECT_TRUE(diagnostics.Ve.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 54);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 18);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
+
+	Sensor::setInvalidMockValue(SensorType::Tps1);
+	auto failedWithoutCapture = dut.evaluateAirmass(1900);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	auto failedWithCapture = dut.evaluateAirmass(1900, &diagnostics);
+	expectSameEvaluation(failedWithoutCapture, failedWithCapture);
+	EXPECT_FALSE(failedWithCapture.Valid);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.Valid);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.Valid);
 	expectSeededDiagnostics();
 }
 
@@ -170,6 +219,48 @@ TEST(AirmassEvaluation, InvalidSpeedDensityTemperaturePublishesOnlyMapSnapshot) 
 	for (size_t i = 0; i < VE_BLEND_COUNT; i++) {
 		EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.veBlendOutput[i]), 30 + i);
 	}
+}
+
+TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailure) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->displacement = 2.4f;
+	setCylinderCount(4);
+	engine->engineState.sd.tChargeK = 310;
+	Sensor::setMockValue(SensorType::Tps1, 24);
+	Sensor::setMockValue(SensorType::Map, 46);
+
+	StrictMock<MockVp3d> veTable;
+	StrictMock<MockVp3d> mapEstimate;
+	EXPECT_CALL(mapEstimate, getValue(2100, 24)).Times(4).WillRepeatedly(Return(73));
+	EXPECT_CALL(veTable, getValue(2100, 46)).Times(2).WillRepeatedly(Return(58));
+	SpeedDensityAirmass dut(&veTable, mapEstimate);
+	seedPublishedDiagnostics();
+
+	auto withoutCapture = dut.evaluateAirmass(2100);
+	AirmassDiagnostics diagnostics;
+	auto withCapture = dut.evaluateAirmass(2100, &diagnostics);
+	expectSameEvaluation(withoutCapture, withCapture);
+	EXPECT_TRUE(withCapture.Valid);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	EXPECT_TRUE(diagnostics.Ve.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 58);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 46);
+	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_TRUE(diagnostics.Map.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 73);
+
+	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
+	auto failedWithoutCapture = dut.evaluateAirmass(2100);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	auto failedWithCapture = dut.evaluateAirmass(2100, &diagnostics);
+	expectSameEvaluation(failedWithoutCapture, failedWithCapture);
+	EXPECT_FALSE(failedWithCapture.Valid);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.Valid);
+	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_TRUE(diagnostics.Map.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 73);
+	expectSeededDiagnostics();
 }
 
 TEST(AirmassEvaluation, MapSnapshotTracksTransientEstimateValidity) {
@@ -222,16 +313,20 @@ TEST(AirmassEvaluation, ModelSnapshotsRemainIndependentUntilPublished) {
 	AlphaNAirmass alphaN(&alphaNVeTable);
 	seedPublishedDiagnostics();
 
-	auto sdEvaluation = sd.evaluateAirmass(2000);
-	auto alphaNEvaluation = alphaN.evaluateAirmass(2000);
+	AirmassDiagnostics sdDiagnostics;
+	AirmassDiagnostics alphaNDiagnostics;
+	auto sdEvaluation = sd.evaluateAirmass(2000, &sdDiagnostics);
+	auto alphaNEvaluation = alphaN.evaluateAirmass(2000, &alphaNDiagnostics);
 	EXPECT_NEAR(sdEvaluation.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 60, 45, 300), EPS4D);
 	EXPECT_FLOAT_EQ(sdEvaluation.Result.EngineLoadPercent, 45);
 	EXPECT_NEAR(alphaNEvaluation.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 30, 101.325f, 293), EPS4D);
 	EXPECT_FLOAT_EQ(alphaNEvaluation.Result.EngineLoadPercent, 11);
+	EXPECT_FLOAT_EQ(sdDiagnostics.Ve.Ve, 60);
+	EXPECT_FLOAT_EQ(alphaNDiagnostics.Ve.Ve, 30);
 	expectSeededDiagnostics();
 
 	// Publishing the retained SD value after evaluating Alpha-N must still publish the SD snapshot.
-	AirmassVeModelBase::publishEvaluation(sdEvaluation);
+	AirmassVeModelBase::publishEvaluation(sdDiagnostics);
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 60);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 45);
 	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 70);
@@ -292,19 +387,23 @@ TEST(AirmassEvaluation, IdleTaperThenCompoundsCorrectionsAndPublishesCapturedAxe
 
 	AlphaNAirmass dut(&veTable);
 	seedPublishedDiagnostics();
-	auto evaluation = dut.evaluateVe(2300, 35);
+	VeDiagnostics diagnostics;
+	auto evaluation = dut.evaluateVe(2300, 35, &diagnostics);
 
 	// Idle taper first: 40 + 50% * (60 - 40) = 50. Then 50 * 1.20 * 0.75 = 45.
 	EXPECT_TRUE(evaluation.Valid);
 	EXPECT_FLOAT_EQ(evaluation.Ve, 45);
-	EXPECT_FLOAT_EQ(evaluation.Load, 35);
-	EXPECT_FLOAT_EQ(evaluation.IdleLoad, 22);
-	EXPECT_FLOAT_EQ(evaluation.Blends[0].BlendParameter, 44);
-	EXPECT_FLOAT_EQ(evaluation.Blends[0].Value, 20);
-	EXPECT_FLOAT_EQ(evaluation.Blends[0].TableYAxis, 35);
-	EXPECT_FLOAT_EQ(evaluation.Blends[1].BlendParameter, 33);
-	EXPECT_FLOAT_EQ(evaluation.Blends[1].Value, -25);
-	EXPECT_FLOAT_EQ(evaluation.Blends[1].TableYAxis, 83);
+	EXPECT_TRUE(diagnostics.Valid);
+	EXPECT_TRUE(diagnostics.HasValue);
+	EXPECT_FLOAT_EQ(diagnostics.Ve, 45);
+	EXPECT_FLOAT_EQ(diagnostics.Load, 35);
+	EXPECT_FLOAT_EQ(diagnostics.IdleLoad, 22);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[0].BlendParameter, 44);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[0].Value, 20);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[0].TableYAxis, 35);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[1].BlendParameter, 33);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[1].Value, -25);
+	EXPECT_FLOAT_EQ(diagnostics.Blends[1].TableYAxis, 83);
 	expectSeededDiagnostics();
 
 	// Publication must consume the captured values, without looking up changed sensors or the table again.
@@ -312,7 +411,7 @@ TEST(AirmassEvaluation, IdleTaperThenCompoundsCorrectionsAndPublishesCapturedAxe
 	Sensor::setMockValue(SensorType::Map, 9);
 	Sensor::setMockValue(SensorType::Clt, 1);
 	Sensor::setMockValue(SensorType::Iat, 2);
-	AirmassVeModelBase::publishVe(evaluation);
+	AirmassVeModelBase::publishVe(diagnostics);
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 45);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 35);
 	EXPECT_FLOAT_EQ(engine->engineState.idleVeTableYAxis, 22);
@@ -362,4 +461,47 @@ TEST(AirmassEvaluation, DualMafUsesSumAndSingleBankFallbacks) {
 	auto invalid = dut.evaluateAirmass(6000);
 	EXPECT_FALSE(invalid.Valid);
 	EXPECT_FLOAT_EQ(invalid.Result.CylinderAirmass, 0);
+}
+
+TEST(AirmassEvaluation, MafCaptureMatchesNoCaptureAndRpmZeroClearsReuse) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->displacement = 2.0f;
+	setCylinderCount(4);
+	Sensor::setMockValue(SensorType::Maf, 72);
+	Sensor::resetMockValue(SensorType::Maf2);
+
+	NiceMock<MockVp3d> veTable;
+	ON_CALL(veTable, getValue(6000, testing::_)).WillByDefault(Return(80));
+	MafAirmass dut(&veTable);
+	seedPublishedDiagnostics();
+
+	auto withoutCapture = dut.evaluateAirmass(6000);
+	AirmassDiagnostics diagnostics;
+	auto withCapture = dut.evaluateAirmass(6000, &diagnostics);
+	expectSameEvaluation(withoutCapture, withCapture);
+	EXPECT_TRUE(withCapture.Valid);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	EXPECT_TRUE(diagnostics.Ve.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 80);
+
+	// A failed sensor still runs the legacy zero-flow VE lookup at nonzero RPM.
+	Sensor::setInvalidMockValue(SensorType::Maf);
+	auto invalidSensorWithoutCapture = dut.evaluateAirmass(6000);
+	auto invalidSensorWithCapture = dut.evaluateAirmass(6000, &diagnostics);
+	expectSameEvaluation(invalidSensorWithoutCapture, invalidSensorWithCapture);
+	EXPECT_FALSE(invalidSensorWithCapture.Valid);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	EXPECT_TRUE(diagnostics.Ve.Valid);
+
+	// RPM zero exits before VE evaluation and must clear presence on a reused capture.
+	auto failedWithoutCapture = dut.evaluateAirmass(0);
+	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	auto failedWithCapture = dut.evaluateAirmass(0, &diagnostics);
+	expectSameEvaluation(failedWithoutCapture, failedWithCapture);
+	EXPECT_FALSE(failedWithCapture.Valid);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.Valid);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.Valid);
+	expectSeededDiagnostics();
 }

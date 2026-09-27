@@ -3,8 +3,9 @@
 ## Status and scope
 
 Design started on 2026-09-27. Stage 1 separates model evaluation from diagnostic
-publication. Independent calibration maps and the SD + Alpha-N mode remain
-planned work; the new mode is not yet available in firmware or TunerStudio.
+publication, with compact numeric results and optional diagnostic capture.
+Independent calibration maps and the SD + Alpha-N mode remain planned work;
+the new mode is not yet available in firmware or TunerStudio.
 
 - Branch: `feature/blended-airmass`.
 - Base: upstream `FOME-Tech/fome-fw` `master`, fetched on 2026-09-27,
@@ -140,11 +141,22 @@ mass before these overrides are evaluated. Switching from standalone Alpha-N
 to composite therefore requires reviewing every default-load calibration, not
 only the two main maps.
 
-Separate per-model calculation from final state publication. A model result
-needs mass, native load, VE/filling, validity, and enough diagnostics to publish
-without re-running the lookup. The normal composite calculation publishes once.
+Separate per-model calculation from final state publication. Keep the numeric
+result compact: mass, native load, validity and any additional scalar required
+by the composite calculation. Diagnostic capture is optional and caller-owned;
+request it when a complete result must be published later without re-running
+lookups. Avoid keeping a copy of all correction diagnostics for each branch.
+The normal composite calculation evaluates the branches without publication,
+applies shared corrections once, and publishes the final state.
+
+The existing standalone `postState=true` wrappers can publish through a small
+explicit diagnostic target as values are computed. This preserves their normal
+publication order without reserving a full diagnostic capture on the stack.
+Public evaluation APIs support no capture or deferred capture only.
 `postState=false` must not mutate VE/axis/blend diagnostics or live validity.
-Avoid heap allocation and large temporary table copies.
+Keep numerical equations shared between these delivery paths. Avoid heap
+allocation, global scratch buffers and large temporary table copies; the
+fast-loop, trigger and Lua callers can run in different contexts.
 
 Publish SD mass, Alpha-N mass, requested and effective authority, final mass,
 each table's actual load axis, and validity/fallback status. Define existing
@@ -409,120 +421,152 @@ from the design commit and restored to its original tracked content.
 
 These initial results preceded firmware implementation. Stage 1 results follow.
 
-### Stage 1: model evaluation and publication
+### Stage 1: compact evaluation and optional diagnostics
 
-SD, Alpha-N and MAF now return calculation snapshots containing mass, native
-load, VE, correction diagnostics and, for SD, MAP selection. Callers can evaluate
-several models and explicitly publish one captured result. The existing
-`getAirmass(..., postState)` and `getVe(..., postState)` APIs wrap this operation,
-including legacy numeric fallbacks and partial diagnostic publication on SD
-failures. Evaluation still emits existing warning codes.
+SD, Alpha-N and MAF expose evaluation APIs that return mass, native load and
+numeric validity without publishing live diagnostics. A caller can optionally
+supply an `AirmassDiagnostics` buffer, retain its values across other model
+queries, and publish it explicitly. Existing warning codes remain enabled.
 
-The VE helper fills each model's snapshot directly. The initial ARM builds
-exposed an extra 80-byte VE temporary and copy, which increased stack use on the
-1,024-byte MainLoop thread. The in-place helper removes that temporary while
-keeping initialized snapshots on early failure paths.
+The legacy `getAirmass(..., postState)` and `getVe(..., postState)` wrappers use
+the same calculation functions. With `postState=true`, an explicit diagnostic
+target writes each correction result as it is calculated, followed by final VE
+and axes. It does not allocate a full capture. With `postState=false`, neither
+capture nor publication is requested. This preserves numeric fallbacks,
+correction multiplication order and partial publication on failed SD calls.
+Publication consists of sequential field writes; it is not an atomic snapshot.
+
+The ARM layouts are:
+
+| Type | Bytes | Contents |
+| --- | ---: | --- |
+| `AirmassEvaluation` | 12 | Mass, native load, numeric validity. |
+| `VeEvaluation` | 8 | Corrected VE and numeric validity. |
+| `AirmassDiagnostics` | 92, optional | VE, axes, four correction results, MAP selection and presence/validity flags. |
+| `VeDiagnostics` | 80, optional | VE portion of the full capture. |
+
+The previous implementation (`ea1da36cdf`) returned a 104-byte snapshot on every
+model call. The compact API moves its 92-byte diagnostic payload into an
+optional caller-owned buffer. Requesting both still needs 104 bytes of payload;
+ordinary model calls no longer pay for that buffer. Actual stack use also
+includes compiler temporaries, saved registers and nested calls, so the type
+sizes alone do not measure the stack saving.
+
+Reusing a capture clears its presence and validity flags at entry. Absent
+diagnostic payloads are not guaranteed to be refreshed and must not be
+published. For example, an explicit SD MAP is retained numerically, while
+`Map.HasValue` stays false because no fallback MAP was evaluated for publication.
+Publication checks presence independently of numeric validity, preserving
+legacy failure behavior without republishing a previous call's values. No heap allocation,
+global scratch buffer or diagnostic-array copy is introduced in the normal
+calculation path.
 
 Each model has its own VE lookup override. All three still use the legacy VE
-table and axes in this stage; no calibration layout, mode IDs, defaults or
-TunerStudio controls change. Lua still requests evaluation without publication.
-Its existing read-only `getAirmass` hook is now also compiled into host tests;
-the regression runs actual Lua queries for all three models.
+table and axes in this stage; calibration layout, mode IDs, defaults and
+TunerStudio controls remain unchanged. Lua's existing `getAirmass` hook is
+compiled into host tests and remains a query without live diagnostic writes.
 
-Snapshot validity distinguishes unusable model inputs/results from a legitimate
-zero mass. It does not validate calibration readiness or supply injection fault
-gating. In particular, unavailable correction-channel inputs still use the
-existing neutral correction. Their validation is required before enabling the
-composite mode.
+Numeric validity distinguishes unusable model inputs/results from a legitimate
+zero mass. It does not validate calibration readiness or provide injection
+fault gating. Unavailable correction-channel inputs still use the existing
+neutral correction; the composite implementation must validate them separately.
 
-Astra high implemented the model changes. Sol high independently reviewed the
-firmware diff and wrote the regressions; Astra high reviewed those tests. The
-review added cross-model snapshot isolation, zero-mass validity, failed SD
-publication and MAP-estimate cases. No source behavior regression was identified.
+Astra high implemented the compact API and reviewed the regressions. Sol high
+wrote the capture/no-capture parity and buffer-reuse tests, independently
+reviewed the firmware, and inspected ARM resource use.
 
 #### Automated validation (2026-09-27)
 
-These results use the final stage 1 source changes on parent commit
-`d38184f36478c5ef22f799b47acd6f2f65886711`. ARM baseline builds used a separate,
-clean worktree at `ede26b3702126e86fc956543e8ff0e9d4a986aa6` with the same pinned
-toolchain and board scripts. Host and ARM builds ran sequentially in the feature
-worktree, with board-specific clean targets and host PCH removal between them.
+These results use the compact evaluation changes on parent commit
+`ea1da36cdf74c7dd3654c325ffe6ca7429e72628`. ARM baseline builds used a separate
+worktree at `ede26b3702126e86fc956543e8ff0e9d4a986aa6`, with the same pinned
+toolchain and board scripts. Host and ARM builds ran sequentially, with explicit
+firmware and bootloader cleans and host PCH removal between targets.
 
 | Check | Result |
 | --- | --- |
 | Host `make -j12` | Exit 0; existing compiler warnings remain. |
-| Targeted `AirmassEvaluation.*:AirmassModes.*:FuelMath.*:LuaHooks.*` | Exit 0; 39 tests passed. |
-| Full `./build/fome_test` from `unit_tests/` | Exit 0; **730 tests passed in 136 suites**, 3.084 seconds. |
-| Core8 `bash compile_core8.sh` from its board directory | Exit 0, bootloader and main firmware. |
-| Proteus F7 `bash compile_proteus_f7.sh` from its board directory | Exit 0, bootloader and main firmware. |
-| Vendored clang-format dry run and `git diff --check` | Exit 0 for all changed C++ files and the new test. |
+| Targeted `AirmassEvaluation.*:AirmassModes.*:FuelMath.*:LuaHooks.*` | Exit 0; 42 tests passed. |
+| Full `./build/fome_test` from `unit_tests/` | Exit 0; **733 tests passed in 136 suites**. |
+| Core8 `bash compile_core8.sh` | Exit 0, bootloader and main firmware. |
+| Proteus F7 `bash compile_proteus_f7.sh` | Exit 0, bootloader and main firmware. |
+| Vendored clang-format dry run and `git diff --check` | Exit 0 for changed C++ files and documentation. |
 
-Sizes are bytes. GNU `size` text includes read-only data; it is not the `.text`
-section alone. Signature strings also differ between baseline and feature builds.
+#### Stack allocation and compiled memory use
 
-| Board | GNU text, baseline -> stage 1 | Data | BSS | Config page | Output block |
+MainLoop requests 1,088 bytes of application stack, compared with 1,024 upstream
+and 1,280 in `ea1da36cdf`. The added reserve is **64 bytes instead of 256**. The
+largest increase over upstream on the selected normal airmass call paths is
+48 bytes, so this allocation preserves their previous arithmetic cushion.
+
+ARM disassembly confirms that ordinary model calls use a 12-byte diagnostic
+target and no full diagnostic buffer. No model or shared evaluator contains
+the previous 104-byte initialization or diagnostic-array copy. Public optional
+capture APIs have no production caller yet and are eliminated by LTO; their
+independent stack frames therefore cannot be measured from these firmware ELFs.
+Host regressions cover their behavior.
+
+Selected call-path sums include `ThreadTask`, `MainLoop::PeriodicTask`,
+`Engine::periodicFastCallback`, the model, VE correction, GPPWM input lookup,
+and either a stored sensor with timeout check or a simple redundant-to-stored
+sensor chain:
+
+| SD path | Upstream | Previous snapshot | Compact result |
+| --- | ---: | ---: | ---: |
+| Core8, stored sensor | 724 | 852 | 772 |
+| Core8, redundant sensor | 780 | 908 | 828 |
+| Proteus F7, stored sensor | 708 | 852 | 748 |
+| Proteus F7, redundant sensor | 764 | 908 | 804 |
+
+These are selected static lower bounds, not worst-case stack requirements or
+measured free margins. Indirect sensor composition, exceptional paths and
+runtime history remain outside that calculation. ChibiOS adds bookkeeping,
+context and interrupt reserves around the requested stack; those reserves
+are not additional application call-frame budget.
+
+Final measured sizes are bytes. GNU `size` text includes read-only data;
+branch/date signature strings also differ between upstream and this branch.
+
+| Board | GNU text, upstream -> compact | Data | GNU BSS | Config page | Output block |
 | --- | --- | --- | --- | --- | --- |
-| Core8 | 651,602 -> 652,186 (**+584**) | 2,504, unchanged | 186,816 -> 187,072 (**+256**) | 23,736, unchanged | 1,356, unchanged |
-| Proteus F7 | 691,302 -> 692,026 (**+724**) | 1,332, unchanged | 458,220, unchanged | 27,736, unchanged | 1,356, unchanged |
+| Core8 | 651,602 -> 651,926 (**+324**) | 2,504, unchanged | 186,816 -> 186,880 (**+64**) | 23,736, unchanged | 1,356, unchanged |
+| Proteus F7 | 691,302 -> 691,658 (**+356**) | 1,332, unchanged | 458,220, unchanged | 27,736, unchanged | 1,356, unchanged |
 
-Both boards reserve 256 additional static bytes for MainLoop. On Core8, `.ram4`
-grows from 58,256 to 58,512 bytes, leaving 7,024 bytes of CCM; the 8,680-byte heap
-is unchanged. On Proteus F7, `.ram3` grows from 64,816 to 65,072 bytes and its
-remaining heap decreases from 66,256 to 66,000 bytes. GNU `size` includes that
-heap in its BSS total, so the unchanged aggregate on F7 does not mean unchanged
-static allocation.
+Core8 `.ram4` is 58,320 bytes, leaving 7,216 bytes of CCM; its 8,680-byte heap is
+unchanged. Proteus F7 `.ram3` is 64,880 bytes, with a 66,192-byte remaining heap.
+F7's aggregate GNU BSS includes this heap, so its unchanged total hides the
+64-byte transfer from heap to static allocation. Both boards recover **192
+bytes of static RAM** compared with `ea1da36cdf`.
 
-The `.text` section grows by 560 bytes on Core8 and 688 bytes on Proteus F7;
-`.rodata` grows by 24 and 36 bytes respectively. Both bootloader S-records have
-the same SHA-256 hashes as baseline. Core8 deliverables are `fome.bin` (687,460
-bytes), `fome_update.srec` (1,964,178) and `fome_bl.srec` (60,460). Proteus F7
-deliverables are 726,136, 2,080,202 and 59,692 bytes respectively.
+The `.text` section grows by 300 bytes on Core8 and 320 on F7 relative to
+upstream; `.rodata` grows by 24 and 36 bytes. Compared with `ea1da36cdf`, GNU
+text decreases by 260 and 368 bytes respectively. Bootloader S-records match
+upstream byte for byte. Final deliverables:
 
-ARM disassembly confirms that the in-place helper removes 80 bytes from each
-model's stack frame compared with the first implementation. Only the 104-byte
-model snapshot initialization remains; the additional 80-byte initialization
-and copy are gone. Final function frame sizes, compared with upstream, are:
+| Board | `fome.bin` | `fome_update.srec` | `fome_bl.srec` |
+| --- | ---: | ---: | ---: |
+| Core8 | 687,200 | 1,963,386 | 60,460 |
+| Proteus F7 | 725,768 | 2,079,098 | 59,692 |
 
-| Board | Alpha-N / MAF frame | SD frame | Shared VE calculation frame |
-| --- | --- | --- | --- |
-| Core8 | 64 -> 160 bytes | 56 -> 192 bytes | 96 -> 88 bytes |
-| Proteus F7 | 64 -> 160 bytes | 56 -> 200 bytes | 88 -> 88 bytes |
+On-target MainLoop stack watermarks and execution-time measurements remain
+required before engine use and before adding simultaneous model evaluation.
+Check `threads` after representative sensor/correction and fault paths, and
+compare `PE::GetBaseFuel`, `PE::GetSpeedDensityFuel` and MainLoop timing. Rare
+trigger/RPM-transition calls use the separate exception stack and retain their
+own watermark check. No ECU timing or watermark was measured in this stage.
 
-MainLoop's requested thread stack increases from 1,024 to 1,280 bytes to offset
-the additional model snapshot. ChibiOS separately adds working area space for
-thread bookkeeping, context and interrupt reserves; those reserves are not
-extra application stack budget. Including the periodic wrapper, MainLoop,
-engine callback, model, VE helper, enabled correction and a stored sensor with
-its timeout check gives a selected call-path lower bound of 852 bytes for SD on
-both boards. A simple redundant-sensor chain raises that to 908 bytes. This
-motivated the extra 256-byte allocation. These values are not a worst-case bound
-or a measured remaining margin; indirect sensor and fault paths depend on
-configuration.
+Matching generated INIs, ELF/map files, images, hashes, host logs and the stack
+review are retained locally:
 
-The final code still uses more stack than upstream. On-target MainLoop stack
-watermarks and execution-time measurements remain required before engine use
-and before adding simultaneous model evaluation. No timing or stack watermark
-was measured on an ECU during this stage.
+- `/tmp/fome-blended-compact-artifacts/{core8,proteus-f7}/`
+- `/tmp/fome-blended-compact-artifacts/host-{build,targeted,tests}.log`
+- `/tmp/fome-blended-compact-artifacts/stack-review.md`
+- `/tmp/fome-blended-compact-1280-artifacts/stack-review.md` (initial compact build)
+- `/tmp/fome-blended-stage1-artifacts/` (previous snapshot implementation)
+- `/tmp/fome-blended-baseline-artifacts/` (upstream)
 
-An incremental Proteus F7 rerun encountered an incompatible firmware PCH while
-building the bootloader. The final successful builds used explicit firmware
-and bootloader cleans; no compiler flags or source were changed to bypass it.
-
-Build-generated tracked changes were confined to INI branch/date signatures
-and connector source-path comments; they were restored after inspection.
-Matching generated INIs, ELF/map files, firmware images and hashes are retained
-with the local evidence:
-
-- `/tmp/fome-blended-stage1-final-build.log`
-- `/tmp/fome-blended-stage1-targeted.log`
-- `/tmp/fome-blended-stage1-tests.log`
-- `/tmp/fome-blended-stage1-core8.log`
-- `/tmp/fome-blended-stage1-proteus-f7.log`
-- `/tmp/fome-blended-stage1-artifacts/{core8,proteus-f7}/`
-- `/tmp/fome-blended-stage1-artifacts/stack-review.md`
-- `/tmp/fome-blended-baseline-artifacts/{core8,proteus-f7}/`
-
-The next implementation stage adds independent 16 x 16 tables and axes,
-explicit opt-in and conversion, followed by the composite calculation and
-injection fault policy. Simulator, TunerStudio and hardware qualification of
-the new mode remain future gates.
+Generated INI signature and connector-path changes are excluded from the
+commit after inspection. The next stage adds independent 16 x 16 tables and
+axes, explicit opt-in and conversion, followed by the composite calculation
+and injection fault policy. Simulator, TunerStudio and hardware qualification
+of the new mode remain future gates.

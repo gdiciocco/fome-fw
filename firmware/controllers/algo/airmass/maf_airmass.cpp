@@ -31,17 +31,17 @@ float MafAirmass::getMaf(bool& valid) const {
 }
 
 AirmassResult MafAirmass::getAirmass(float rpm, bool postState) {
-	auto evaluation = evaluateAirmass(rpm);
-	if (postState) {
-		publishEvaluation(evaluation);
-	}
-	return evaluation.Result;
+	return evaluateAirmass(rpm, DiagnosticsTarget(postState)).Result;
 }
 
-AirmassEvaluation MafAirmass::evaluateAirmass(float rpm) const {
+AirmassEvaluation MafAirmass::evaluateAirmass(float rpm, AirmassDiagnostics* diagnostics) const {
+	return evaluateAirmass(rpm, DiagnosticsTarget(diagnostics));
+}
+
+AirmassEvaluation MafAirmass::evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const {
 	bool valid;
 	float maf = getMaf(valid);
-	auto evaluation = evaluateAirmassImpl(maf, rpm);
+	auto evaluation = evaluateAirmassImpl(maf, rpm, diagnostics);
 	evaluation.Valid = evaluation.Valid && valid;
 	return evaluation;
 }
@@ -51,14 +51,15 @@ AirmassEvaluation MafAirmass::evaluateAirmass(float rpm) const {
  * @return total duration of fuel injection per engine cycle, in milliseconds
  */
 AirmassResult MafAirmass::getAirmassImpl(float massAirFlow, float rpm, bool postState) const {
-	auto evaluation = evaluateAirmassImpl(massAirFlow, rpm);
-	if (postState) {
-		publishEvaluation(evaluation);
-	}
-	return evaluation.Result;
+	return evaluateAirmassImpl(massAirFlow, rpm, DiagnosticsTarget(postState)).Result;
 }
 
-AirmassEvaluation MafAirmass::evaluateAirmassImpl(float massAirFlow, float rpm) const {
+AirmassEvaluation MafAirmass::evaluateAirmassImpl(float massAirFlow, float rpm, AirmassDiagnostics* diagnostics) const {
+	return evaluateAirmassImpl(massAirFlow, rpm, DiagnosticsTarget(diagnostics));
+}
+
+AirmassEvaluation
+MafAirmass::evaluateAirmassImpl(float massAirFlow, float rpm, const DiagnosticsTarget& diagnostics) const {
 	AirmassEvaluation evaluation;
 	// If the engine is stopped, MAF is meaningless
 	if (rpm == 0) {
@@ -82,14 +83,14 @@ AirmassEvaluation MafAirmass::evaluateAirmassImpl(float massAirFlow, float rpm) 
 	float airChargeLoad = 100 * cylinderAirmass / getStandardAirCharge();
 
 	// Correct air mass by VE table
-	evaluateVe(rpm, airChargeLoad, evaluation.Ve);
-	mass_t correctedAirmass = cylinderAirmass * (evaluation.Ve.Ve * PERCENT_DIV);
+	auto ve = evaluateVe(rpm, airChargeLoad, diagnostics);
+	mass_t correctedAirmass = cylinderAirmass * (ve.Ve * PERCENT_DIV);
 
 	evaluation.Result = {
 			correctedAirmass,
 			airChargeLoad, // AFR/VE/ignition table Y axis
 	};
-	evaluation.Valid = evaluation.Ve.Valid && rpm > 0 && std::isfinite(massAirFlow) && massAirFlow >= 0 &&
+	evaluation.Valid = ve.Valid && rpm > 0 && std::isfinite(massAirFlow) && massAirFlow >= 0 &&
 					   std::isfinite(airChargeLoad) && std::isfinite(correctedAirmass) && correctedAirmass >= 0;
 	return evaluation;
 }

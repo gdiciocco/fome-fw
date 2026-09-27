@@ -4,33 +4,38 @@
 AirmassResult SpeedDensityAirmass::getAirmass(float rpm, bool postState) {
 	ScopePerf perf(PE::GetSpeedDensityFuel);
 
-	auto evaluation = evaluateAirmass(rpm);
-	if (postState) {
-		publishEvaluation(evaluation);
-	}
-	return evaluation.Result;
+	return evaluateAirmass(rpm, DiagnosticsTarget(postState)).Result;
 }
 
 AirmassResult SpeedDensityAirmass::getAirmass(float rpm, float map, bool postState) {
-	auto evaluation = evaluateAirmass(rpm, map);
-	if (postState) {
-		publishEvaluation(evaluation);
-	}
-	return evaluation.Result;
+	return evaluateAirmass(rpm, map, DiagnosticsTarget(postState)).Result;
 }
 
-AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm) const {
+AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, AirmassDiagnostics* diagnostics) const {
+	return evaluateAirmass(rpm, DiagnosticsTarget(diagnostics));
+}
+
+AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const {
 	auto map = evaluateMap(rpm);
-	auto evaluation = evaluateAirmass(rpm, map.Map);
-	evaluation.Map = map;
+	diagnostics.map(map);
+	auto evaluation = evaluateAirmass(rpm, map.Map, diagnostics);
 	evaluation.Valid = evaluation.Valid && map.Valid;
 	return evaluation;
 }
 
-AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, float map) const {
+AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, float map, AirmassDiagnostics* diagnostics) const {
+	DiagnosticsTarget target(diagnostics);
+	MapEvaluation mapEvaluation;
+	mapEvaluation.Map = map;
+	mapEvaluation.Valid = std::isfinite(map) && map >= 0;
+	// Retain the supplied numerical MAP without marking fallback diagnostics present.
+	target.map(mapEvaluation);
+	return evaluateAirmass(rpm, map, target);
+}
+
+AirmassEvaluation
+SpeedDensityAirmass::evaluateAirmass(float rpm, float map, const DiagnosticsTarget& diagnostics) const {
 	AirmassEvaluation evaluation;
-	evaluation.Map.Map = map;
-	evaluation.Map.Valid = std::isfinite(map) && map >= 0;
 	// An explicit MAP does not calculate or publish fallback MAP diagnostics.
 	/**
 	 * most of the values are pre-calculated for performance reasons
@@ -42,8 +47,8 @@ AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, float map) con
 		return evaluation;
 	}
 
-	evaluateVe(rpm, map, evaluation.Ve);
-	float ve = evaluation.Ve.Ve * PERCENT_DIV;
+	auto veEvaluation = evaluateVe(rpm, map, diagnostics);
+	float ve = veEvaluation.Ve * PERCENT_DIV;
 
 	float airMass = getAirmassImpl(ve, map, tChargeK);
 	if (std::isnan(airMass)) {
@@ -55,8 +60,8 @@ AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, float map) con
 			airMass,
 			map, // AFR/VE table Y axis
 	};
-	evaluation.Valid = evaluation.Map.Valid && evaluation.Ve.Valid && std::isfinite(tChargeK) && tChargeK > 0 &&
-					   std::isfinite(airMass) && airMass >= 0;
+	evaluation.Valid = std::isfinite(map) && map >= 0 && veEvaluation.Valid && std::isfinite(tChargeK) &&
+					   tChargeK > 0 && std::isfinite(airMass) && airMass >= 0;
 	return evaluation;
 }
 
@@ -76,12 +81,7 @@ float SpeedDensityAirmass::getAirflow(float rpm, float map, bool postState) {
 
 float SpeedDensityAirmass::getMap(float rpm, bool postState) const {
 	auto evaluation = evaluateMap(rpm);
-
-#if EFI_TUNER_STUDIO
-	if (postState) {
-		engine->outputChannels.fallbackMap = evaluation.FallbackMap;
-	}
-#endif // EFI_TUNER_STUDIO
+	DiagnosticsTarget(postState).map(evaluation);
 	return evaluation.Map;
 }
 
