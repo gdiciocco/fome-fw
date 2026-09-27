@@ -585,8 +585,8 @@ protected:
 
 TEST_P(EtbOutput, invalidDisablesPreviouslyActiveMotor) {
 	::testing::InSequence sequence;
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(0.25f));
+	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, disable(_)).Times(2);
 
 	controller.setOutput(25.0f);
@@ -602,8 +602,8 @@ TEST_P(EtbOutput, validOutputPreservesDirectionAndLimits) {
 	const float outputs[] = {-110, -25, 0, 25, 110};
 	const float duties[] = {-0.9f, -0.25f, 0, 0.25f, 0.9f};
 	for (size_t i = 0; i < efi::size(outputs); i++) {
-		EXPECT_CALL(motor, enable());
 		EXPECT_CALL(motor, set(duties[i]));
+		EXPECT_CALL(motor, enable());
 		controller.setOutput(outputs[i]);
 	}
 }
@@ -611,8 +611,8 @@ TEST_P(EtbOutput, validOutputPreservesDirectionAndLimits) {
 TEST_P(EtbOutput, pauseAppliesOnlyToThrottles) {
 	engineConfiguration->pauseEtbControl = true;
 	if (GetParam() == DC_Wastegate) {
-		EXPECT_CALL(motor, enable());
 		EXPECT_CALL(motor, set(0.25f));
+		EXPECT_CALL(motor, enable());
 	} else {
 		EXPECT_CALL(motor, disable(_));
 	}
@@ -622,8 +622,8 @@ TEST_P(EtbOutput, pauseAppliesOnlyToThrottles) {
 TEST_P(EtbOutput, throttleLimpDoesNotInhibitWastegate) {
 	getLimpManager()->fatalError();
 	if (GetParam() == DC_Wastegate) {
-		EXPECT_CALL(motor, enable());
 		EXPECT_CALL(motor, set(0.25f));
+		EXPECT_CALL(motor, enable());
 	} else {
 		EXPECT_CALL(motor, disable(_));
 	}
@@ -657,8 +657,8 @@ TEST(etb, wastegateFeedbackLossAndRecovery) {
 	controller.update();
 	EXPECT_FLOAT_EQ(0, controller.m_outputDuty);
 
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(0.25f));
+	EXPECT_CALL(motor, enable());
 	Sensor::setMockValue(SensorType::WastegatePosition, 25);
 	controller.update();
 	EXPECT_FLOAT_EQ(25, controller.m_outputDuty);
@@ -671,8 +671,8 @@ TEST(etb, wastegateFeedbackLossAndRecovery) {
 	EXPECT_FLOAT_EQ(0, controller.m_outputDuty);
 
 	// Valid feedback restores closed-loop control, including the opposite direction.
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(-0.25f));
+	EXPECT_CALL(motor, enable());
 	Sensor::setMockValue(SensorType::WastegatePosition, 75);
 	controller.update();
 	EXPECT_FLOAT_EQ(-25, controller.m_outputDuty);
@@ -691,8 +691,8 @@ TEST(etb, setOutputValid) {
 	etb.init(DC_Throttle1, &motor, nullptr, nullptr, true);
 
 	// Should be enabled and value set
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(0.25f)).WillOnce(Return(false));
+	EXPECT_CALL(motor, enable());
 
 	etb.setOutput(25.0f);
 }
@@ -710,8 +710,8 @@ TEST(etb, setOutputValid2) {
 	etb.init(DC_Throttle1, &motor, nullptr, nullptr, true);
 
 	// Should be enabled and value set
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(-0.25f)).WillOnce(Return(false));
+	EXPECT_CALL(motor, enable());
 
 	etb.setOutput(-25.0f);
 }
@@ -729,8 +729,8 @@ TEST(etb, setOutputOutOfRangeHigh) {
 	etb.init(DC_Throttle1, &motor, nullptr, nullptr, true);
 
 	// Should be enabled and value set
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(0.90f));
+	EXPECT_CALL(motor, enable());
 
 	// Off scale - should get clamped to 90%
 	etb.setOutput(110);
@@ -749,8 +749,8 @@ TEST(etb, setOutputOutOfRangeLow) {
 	etb.init(DC_Throttle1, &motor, nullptr, nullptr, true);
 
 	// Should be enabled and value set
-	EXPECT_CALL(motor, enable());
 	EXPECT_CALL(motor, set(-0.90f));
+	EXPECT_CALL(motor, enable());
 
 	// Off scale - should get clamped to -90%
 	etb.setOutput(-110);
