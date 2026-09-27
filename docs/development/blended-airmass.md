@@ -2,8 +2,9 @@
 
 ## Status and scope
 
-Design started on 2026-09-27. This document records the implementation plan;
-it does not indicate that the firmware feature has been implemented or tested.
+Design started on 2026-09-27. Stage 1 separates model evaluation from diagnostic
+publication. Independent calibration maps and the SD + Alpha-N mode remain
+planned work; the new mode is not yet available in firmware or TunerStudio.
 
 - Branch: `feature/blended-airmass`.
 - Base: upstream `FOME-Tech/fome-fw` `master`, fetched on 2026-09-27,
@@ -310,7 +311,7 @@ diagnostics and failure handling are complete.
 | Stage | Work | Lead / review | Exit evidence |
 | --- | --- | --- | --- |
 | 0 | Record baseline, map call paths, finalize this design and existing-test gaps. | Astra high; Sol high for build/config inventory | Exact base SHA, baseline results and known limitations. |
-| 1 | Separate model table selection and calculation diagnostics from publication without changing existing behavior. | Astra high; independent Astra high review | Regression tests for SD, Alpha-N, MAF, overrides, idle VE, corrections and Lua dry reads. |
+| 1 | Separate model table selection and calculation diagnostics from publication without changing existing behavior. | Astra high implementation; Sol high source review; Astra high test review | Regression tests for SD, Alpha-N, MAF, overrides, idle VE, corrections and Lua dry reads. |
 | 2 | Add independent tables/axes, defaults, explicit opt-in and import/conversion support. Add standalone editors and analyzer bindings. | Sol high; Astra high reviews compatibility | Old MSQ fixtures retain behavior; dedicated maps use their own axes; each analyzer writes only its active map; generated layout/INI checks and resource delta. |
 | 3 | Implement composite calculation, fixed final load, correction placement and validated authority. | Astra high | Endpoint/intermediate mass tests, unchanged model physics, one publisher and one correction pass. |
 | 4 | Complete fault gating/recovery, mode activation, diagnostics, TS editors and VE Analyze policy. | Astra high for runtime gating; Sol high for UI/tests | Fault latch prevents new injection despite cranking/AE/Lua requests; queued pulses drain correctly; correct live cursors and no stale mixed-mode state. |
@@ -359,7 +360,7 @@ Generators run through normal builds; do not commit generated outputs.
 # Run from the dedicated worktree's unit_tests directory.
 make -j12
 # During development, select relevant tests before the integration run.
-./build/fome_test --gtest_filter='AirmassModes.*:FuelMath.*:CppMemoryLayout.structSize:TunerstudioCommands.*'
+./build/fome_test --gtest_filter='AirmassEvaluation.*:AirmassModes.*:FuelMath.*:LuaHooks.*'
 ./build/fome_test
 
 # After an appropriate clean, run sequentially from each board directory.
@@ -406,7 +407,122 @@ test run above followed that initialization. The only tracked build output
 change was the generated f407-discovery INI branch/date signature; it is excluded
 from the design commit and restored to its original tracked content.
 
-Firmware implementation, ARM resource measurement, simulator/TunerStudio checks
-and hardware validation have not been performed. The first implementation step
-is stage 1: regression coverage and separation of model evaluation from state
-publication while retaining existing behavior.
+These initial results preceded firmware implementation. Stage 1 results follow.
+
+### Stage 1: model evaluation and publication
+
+SD, Alpha-N and MAF now return calculation snapshots containing mass, native
+load, VE, correction diagnostics and, for SD, MAP selection. Callers can evaluate
+several models and explicitly publish one captured result. The existing
+`getAirmass(..., postState)` and `getVe(..., postState)` APIs wrap this operation,
+including legacy numeric fallbacks and partial diagnostic publication on SD
+failures. Evaluation still emits existing warning codes.
+
+The VE helper fills each model's snapshot directly. The initial ARM builds
+exposed an extra 80-byte VE temporary and copy, which increased stack use on the
+1,024-byte MainLoop thread. The in-place helper removes that temporary while
+keeping initialized snapshots on early failure paths.
+
+Each model has its own VE lookup override. All three still use the legacy VE
+table and axes in this stage; no calibration layout, mode IDs, defaults or
+TunerStudio controls change. Lua still requests evaluation without publication.
+Its existing read-only `getAirmass` hook is now also compiled into host tests;
+the regression runs actual Lua queries for all three models.
+
+Snapshot validity distinguishes unusable model inputs/results from a legitimate
+zero mass. It does not validate calibration readiness or supply injection fault
+gating. In particular, unavailable correction-channel inputs still use the
+existing neutral correction. Their validation is required before enabling the
+composite mode.
+
+Astra high implemented the model changes. Sol high independently reviewed the
+firmware diff and wrote the regressions; Astra high reviewed those tests. The
+review added cross-model snapshot isolation, zero-mass validity, failed SD
+publication and MAP-estimate cases. No source behavior regression was identified.
+
+#### Automated validation (2026-09-27)
+
+These results use the final stage 1 source changes on parent commit
+`d38184f36478c5ef22f799b47acd6f2f65886711`. ARM baseline builds used a separate,
+clean worktree at `ede26b3702126e86fc956543e8ff0e9d4a986aa6` with the same pinned
+toolchain and board scripts. Host and ARM builds ran sequentially in the feature
+worktree, with board-specific clean targets and host PCH removal between them.
+
+| Check | Result |
+| --- | --- |
+| Host `make -j12` | Exit 0; existing compiler warnings remain. |
+| Targeted `AirmassEvaluation.*:AirmassModes.*:FuelMath.*:LuaHooks.*` | Exit 0; 39 tests passed. |
+| Full `./build/fome_test` from `unit_tests/` | Exit 0; **730 tests passed in 136 suites**, 3.084 seconds. |
+| Core8 `bash compile_core8.sh` from its board directory | Exit 0, bootloader and main firmware. |
+| Proteus F7 `bash compile_proteus_f7.sh` from its board directory | Exit 0, bootloader and main firmware. |
+| Vendored clang-format dry run and `git diff --check` | Exit 0 for all changed C++ files and the new test. |
+
+Sizes are bytes. GNU `size` text includes read-only data; it is not the `.text`
+section alone. Signature strings also differ between baseline and feature builds.
+
+| Board | GNU text, baseline -> stage 1 | Data | BSS | Config page | Output block |
+| --- | --- | --- | --- | --- | --- |
+| Core8 | 651,602 -> 652,186 (**+584**) | 2,504, unchanged | 186,816 -> 187,072 (**+256**) | 23,736, unchanged | 1,356, unchanged |
+| Proteus F7 | 691,302 -> 692,026 (**+724**) | 1,332, unchanged | 458,220, unchanged | 27,736, unchanged | 1,356, unchanged |
+
+Both boards reserve 256 additional static bytes for MainLoop. On Core8, `.ram4`
+grows from 58,256 to 58,512 bytes, leaving 7,024 bytes of CCM; the 8,680-byte heap
+is unchanged. On Proteus F7, `.ram3` grows from 64,816 to 65,072 bytes and its
+remaining heap decreases from 66,256 to 66,000 bytes. GNU `size` includes that
+heap in its BSS total, so the unchanged aggregate on F7 does not mean unchanged
+static allocation.
+
+The `.text` section grows by 560 bytes on Core8 and 688 bytes on Proteus F7;
+`.rodata` grows by 24 and 36 bytes respectively. Both bootloader S-records have
+the same SHA-256 hashes as baseline. Core8 deliverables are `fome.bin` (687,460
+bytes), `fome_update.srec` (1,964,178) and `fome_bl.srec` (60,460). Proteus F7
+deliverables are 726,136, 2,080,202 and 59,692 bytes respectively.
+
+ARM disassembly confirms that the in-place helper removes 80 bytes from each
+model's stack frame compared with the first implementation. Only the 104-byte
+model snapshot initialization remains; the additional 80-byte initialization
+and copy are gone. Final function frame sizes, compared with upstream, are:
+
+| Board | Alpha-N / MAF frame | SD frame | Shared VE calculation frame |
+| --- | --- | --- | --- |
+| Core8 | 64 -> 160 bytes | 56 -> 192 bytes | 96 -> 88 bytes |
+| Proteus F7 | 64 -> 160 bytes | 56 -> 200 bytes | 88 -> 88 bytes |
+
+MainLoop's requested thread stack increases from 1,024 to 1,280 bytes to offset
+the additional model snapshot. ChibiOS separately adds working area space for
+thread bookkeeping, context and interrupt reserves; those reserves are not
+extra application stack budget. Including the periodic wrapper, MainLoop,
+engine callback, model, VE helper, enabled correction and a stored sensor with
+its timeout check gives a selected call-path lower bound of 852 bytes for SD on
+both boards. A simple redundant-sensor chain raises that to 908 bytes. This
+motivated the extra 256-byte allocation. These values are not a worst-case bound
+or a measured remaining margin; indirect sensor and fault paths depend on
+configuration.
+
+The final code still uses more stack than upstream. On-target MainLoop stack
+watermarks and execution-time measurements remain required before engine use
+and before adding simultaneous model evaluation. No timing or stack watermark
+was measured on an ECU during this stage.
+
+An incremental Proteus F7 rerun encountered an incompatible firmware PCH while
+building the bootloader. The final successful builds used explicit firmware
+and bootloader cleans; no compiler flags or source were changed to bypass it.
+
+Build-generated tracked changes were confined to INI branch/date signatures
+and connector source-path comments; they were restored after inspection.
+Matching generated INIs, ELF/map files, firmware images and hashes are retained
+with the local evidence:
+
+- `/tmp/fome-blended-stage1-final-build.log`
+- `/tmp/fome-blended-stage1-targeted.log`
+- `/tmp/fome-blended-stage1-tests.log`
+- `/tmp/fome-blended-stage1-core8.log`
+- `/tmp/fome-blended-stage1-proteus-f7.log`
+- `/tmp/fome-blended-stage1-artifacts/{core8,proteus-f7}/`
+- `/tmp/fome-blended-stage1-artifacts/stack-review.md`
+- `/tmp/fome-blended-baseline-artifacts/{core8,proteus-f7}/`
+
+The next implementation stage adds independent 16 x 16 tables and axes,
+explicit opt-in and conversion, followed by the composite calculation and
+injection fault policy. Simulator, TunerStudio and hardware qualification of
+the new mode remain future gates.

@@ -8,4 +8,6 @@ public:
 		: SpeedDensityBase(veTable) {}
 
 	AirmassResult getAirmass(float rpm, bool postState) override;
+	AirmassEvaluation evaluateAirmass(float rpm) const;
+	float getVeImpl(float rpm, percent_t load) const override;
 };

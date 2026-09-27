@@ -8,10 +8,13 @@ public:
 		: AirmassVeModelBase(veTable) {}
 
 	AirmassResult getAirmass(float rpm, bool postState) override;
+	AirmassEvaluation evaluateAirmass(float rpm) const;
+	float getVeImpl(float rpm, percent_t load) const override;
 
 	// Compute airmass based on flow & engine speed
 	AirmassResult getAirmassImpl(float massAirFlow, float rpm, bool postState) const;
+	AirmassEvaluation evaluateAirmassImpl(float massAirFlow, float rpm) const;
 
 private:
-	float getMaf() const;
+	float getMaf(bool& valid) const;
 };
