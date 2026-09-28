@@ -5,8 +5,8 @@
 
 #define MAIN_LOOP_RATE 1000
 
-// Reserve headroom for air-mass evaluation and nested sensor lookups.
-class MainLoop final : PeriodicController<1088> {
+// Reserve headroom for composite air-mass evaluation and nested sensor lookups.
+class MainLoop final : PeriodicController<1536> {
 public:
 	MainLoop();
 	void PeriodicTask(efitick_t nowNt) override;
