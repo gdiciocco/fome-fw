@@ -235,14 +235,32 @@ TEST(airmassInjectionGate, ActivePrimeClosesCapturedMaskAfterConfigurationChange
 
 TEST(airmassInjectionGate, SpinningUpCannotRearmEvenWithZeroSensorRpm) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	eth.setTriggerType(trigger_type_e::TT_ONE);
+	engineConfiguration->isFasterEngineSpinUpEnabled = true;
 	selectComposite();
 	makeReady();
 	gate().rejectCalculation(Fault::Sensor);
 	Sensor::setMockValue(SensorType::Rpm, 0);
-	engine->rpmCalculator.setSpinningUp(getTimeNowNt());
+	eth.fireRise(1);
+	ASSERT_EQ(SPINNING_UP, engine->rpmCalculator.getState());
+	ASSERT_EQ(0, engine->rpmCalculator.getCachedRpm());
+	ASSERT_TRUE(engine->rpmCalculator.isStopped()); // Engine-math predicate, not physical stop.
+	ASSERT_TRUE(engine->triggerCentral.engineMovedRecently());
+
+	engine->periodicSlowCallback();
+	EXPECT_EQ(SPINNING_UP, engine->rpmCalculator.getState());
 	EXPECT_FALSE(gate().rearm());
-	engine->rpmCalculator.setStopSpinning();
+
+	advanceTimeUs(10e6);
+	ASSERT_FALSE(engine->triggerCentral.engineMovedRecently());
+	EXPECT_FALSE(gate().rearm()); // Timeout must still go through the stop transition.
+	engine->periodicSlowCallback();
+	EXPECT_EQ(STOPPED, engine->rpmCalculator.getState());
+	EXPECT_EQ(Status::Latched, gate().status());
+	EXPECT_EQ(Fault::Sensor, gate().fault());
 	EXPECT_TRUE(gate().rearm());
+	EXPECT_EQ(Status::NotReady, gate().status());
+	EXPECT_FALSE(gate().allowInjection());
 }
 
 TEST(airmassInjectionGate, AccountingPrecedesImmediateCallbacks) {
