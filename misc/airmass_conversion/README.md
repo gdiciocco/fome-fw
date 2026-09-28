@@ -5,6 +5,10 @@ preserves the original strategy, its complete 16 x 16 map and both axes. Other
 new strategy maps receive the same placeholder defaults as firmware. Those
 defaults are not an engine calibration.
 
+The current target definition also includes blend authority and readiness
+controls. Conversion writes a zero-authority table and all three readiness
+declarations as false. It retains the original standalone strategy.
+
 Requires Python 3 and the generated INI shipped with the target firmware.
 Build the target board or use its firmware bundle to obtain this INI.
 Use an original legacy MSQ backup, before any dedicated maps were added.
@@ -44,7 +48,7 @@ any existing dedicated map fields, even if their opt-in is disabled, to avoid
 overwriting a prepared calibration. Repeating conversion of the original backup
 is deterministic. An already converted output is rejected.
 
-Both new maps and all their axes are written explicitly. This prevents an import
+Both new maps, authority, readiness controls and all axes are written explicitly. This prevents an import
 from retaining stale values for absent new fields in an existing TS project.
 Before importing an **unconverted** legacy MSQ into new firmware, disable
 dedicated tables explicitly: absence of a key in the MSQ does not reset it.
@@ -63,7 +67,9 @@ dedicated tables explicitly: absence of a key in the MSQ does not reset it.
 
 The converter does not communicate with an ECU. TunerStudio import/burn/reload
 and engine calibration must be checked separately; XML tests do not verify those
-operations. SD/Alpha-N blending is a later firmware stage.
+operations. Selecting SD + Alpha-N requires preparing both model maps and the
+MAP-based downstream load tables, then explicitly declaring readiness. Conversion
+does not perform that calibration or enable the composite mode.
 
 ## Regression tests
 

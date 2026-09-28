@@ -1,0 +1,511 @@
+#include "pch.h"
+
+#include "alphan_airmass.h"
+#include "blended_airmass.h"
+#include "fuel_math.h"
+#include "speed_density_airmass.h"
+#include "tunerstudio.h"
+
+using ::testing::Return;
+using ::testing::StrictMock;
+
+namespace {
+constexpr float AirGasConstant = 0.28705f;
+
+mass_t expectedIdealGasMass(float displacement, int cylinders, float vePercent, float pressure, float temperatureK) {
+	return (vePercent * 0.01f) * displacement * pressure / (AirGasConstant * temperatureK) / cylinders;
+}
+
+void configureFlatVeBlend(blend_table_s& blend, gppwm_channel_e parameter, gppwm_channel_e yAxis, float correction) {
+	blend.blendParameter = parameter;
+	blend.yAxisOverride = yAxis;
+	setTable(blend.table, correction);
+	setLinearCurve(blend.loadBins, 0, 100, 1);
+	setLinearCurve(blend.rpmBins, 0, 7000, 1);
+	setLinearCurve(blend.blendBins, 0, 100, 1);
+	setArrayValues(blend.blendValues, 100);
+}
+
+class BlendedAirmassTest : public ::testing::Test {
+protected:
+	BlendedAirmassTest()
+		: eth(engine_type_e::TEST_ENGINE) {
+		engineConfiguration->fuelAlgorithm = LM_SD_ALPHA_N;
+		engineConfiguration->useDedicatedAirmassTables = true;
+		engineConfiguration->useSeparateVeForIdle = false;
+		engineConfiguration->displacement = 4;
+		engineConfiguration->alphaNUseIat = true;
+		setCylinderCount(4);
+		engine->engineState.sd.tChargeK = 300;
+		config->sdAirmassMapReady = true;
+		config->alphaNAirmassMapReady = true;
+		setTable(config->veTable, 60);
+		setTable(config->alphaNTable, 40);
+		Sensor::setMockValue(SensorType::Map, 50);
+		Sensor::setMockValue(SensorType::Tps1, 20);
+		Sensor::setMockValue(SensorType::AcceleratorPedal, 30);
+		Sensor::setMockValue(SensorType::Iat, 20);
+	}
+
+	EngineTestHelper eth;
+};
+} // namespace
+
+TEST_F(BlendedAirmassTest, AnalyticalAuthorityWeightsUseEachRawModelOnce) {
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+
+	for (float authority : {0, 25, 50, 75, 100}) {
+		setTable(config->airmassBlendTable, authority);
+		BlendedAirmassDiagnostics diagnostics;
+		const auto result = blended.evaluateAirmass(2500, &diagnostics);
+		const float weight = authority * 0.01f;
+		const float expectedMass = authority == 0	? sdMass
+								 : authority == 100 ? alphaNMass
+													: (1 - weight) * sdMass + weight * alphaNMass;
+
+		ASSERT_TRUE(result.Airmass.Valid) << authority;
+		EXPECT_EQ(result.Fault, AirmassInjectionFault::None);
+		EXPECT_NEAR(result.Airmass.Result.CylinderAirmass, expectedMass, EPS4D);
+		EXPECT_FLOAT_EQ(result.Airmass.Result.EngineLoadPercent, 50);
+		EXPECT_NEAR(result.NormalizedFilling, 100 * expectedMass / getStandardAirCharge(), EPS4D);
+		EXPECT_FLOAT_EQ(result.LambdaLoad.Value, 50);
+		EXPECT_EQ(result.LambdaLoad.Source, AirmassLoadSource::EffectiveMap);
+		EXPECT_FLOAT_EQ(result.IgnitionLoad.Value, 50);
+		EXPECT_EQ(result.IgnitionLoad.Source, AirmassLoadSource::EffectiveMap);
+		EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, authority);
+		EXPECT_FLOAT_EQ(diagnostics.EffectiveAuthority, authority);
+		EXPECT_TRUE(diagnostics.Corrections.HasValue);
+		EXPECT_TRUE(diagnostics.Corrections.Valid);
+		EXPECT_TRUE(diagnostics.Flags & BlendedCalculationValid);
+
+		EXPECT_EQ((diagnostics.Flags & BlendedSdEvaluated) != 0, authority < 100);
+		EXPECT_EQ((diagnostics.Flags & BlendedAlphaNEvaluated) != 0, authority > 0);
+		EXPECT_EQ((diagnostics.Flags & BlendedSdValid) != 0, authority < 100);
+		EXPECT_EQ((diagnostics.Flags & BlendedAlphaNValid) != 0, authority > 0);
+		EXPECT_FALSE(diagnostics.Flags & BlendedEstimateEvaluated);
+		EXPECT_FALSE(diagnostics.Flags & BlendedMapEstimateUsed);
+		if (authority < 100) {
+			EXPECT_NEAR(diagnostics.SdMass, sdMass, EPS4D);
+			EXPECT_FLOAT_EQ(diagnostics.Sd.TableValue, 60);
+		}
+		if (authority > 0) {
+			EXPECT_NEAR(diagnostics.AlphaNMass, alphaNMass, EPS4D);
+			EXPECT_FLOAT_EQ(diagnostics.AlphaN.TableValue, 40);
+		}
+	}
+}
+
+TEST_F(BlendedAirmassTest, AuthorityMapUsesTpsRowsAndRpmColumnsWithClampedEdges) {
+	setLinearCurve(config->airmassBlendTpsBins, 0, 70, 0.1f);
+	setLinearCurve(config->airmassBlendRpmBins, 1000, 8000, 1);
+	setTable(config->airmassBlendTable, 0);
+	config->airmassBlendTable[2][2] = 10;
+	config->airmassBlendTable[3][2] = 30;
+	config->airmassBlendTable[2][3] = 50;
+	config->airmassBlendTable[3][3] = 70;
+	config->airmassBlendTable[0][0] = 33;
+	config->airmassBlendTable[AIRMASS_BLEND_LOAD_COUNT - 1][AIRMASS_BLEND_RPM_COUNT - 1] = 99;
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	Sensor::setMockValue(SensorType::Tps1, 22);
+	BlendedAirmassDiagnostics diagnostics;
+	const auto asymmetric = blended.evaluateAirmass(3750, &diagnostics);
+	ASSERT_TRUE(asymmetric.Airmass.Valid);
+	EXPECT_NEAR(diagnostics.RequestedAuthority, 44, EPS4D);
+	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+	EXPECT_NEAR(asymmetric.Airmass.Result.CylinderAirmass, 0.56f * sdMass + 0.44f * alphaNMass, EPS4D);
+
+	Sensor::setMockValue(SensorType::Tps1, 0);
+	EXPECT_TRUE(blended.evaluateAirmass(100, &diagnostics).Airmass.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 33);
+
+	Sensor::setMockValue(SensorType::Tps1, 100);
+	EXPECT_TRUE(blended.evaluateAirmass(9000, &diagnostics).Airmass.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 99);
+}
+
+TEST_F(BlendedAirmassTest, CorrectionsApplyOnceAndLoadsResolveFromFinalComposite) {
+	engineConfiguration->useMapEstimateDuringTransient = true;
+	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
+	config->mapEstimateReady = true;
+	Sensor::setMockValue(SensorType::Map, 40);
+	Sensor::setMockValue(SensorType::Iat, 27);
+	setTable(config->airmassBlendTable, 25);
+	configureFlatVeBlend(config->veBlends[0], GPPWM_Tps, GPPWM_Zero, 20);
+	configureFlatVeBlend(config->veBlends[1], GPPWM_Iat, GPPWM_FuelLoad, -25);
+	engine->engineState.fuelingLoad = 64;
+
+	StrictMock<MockVp3d> mapEstimate;
+	EXPECT_CALL(mapEstimate, getValue(2400, 20)).Times(3).WillRepeatedly(Return(75));
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	const float sdMass = expectedIdealGasMass(4, 4, 60, 75, 300);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 300);
+	const float expectedMass = (0.75f * sdMass + 0.25f * alphaNMass) * 0.9f;
+
+	engineConfiguration->afrOverrideMode = AFR_None;
+	engineConfiguration->ignOverrideMode = AFR_MAP;
+	BlendedAirmassDiagnostics diagnostics;
+	auto result = blended.evaluateAirmass(2400, &diagnostics);
+	ASSERT_TRUE(result.Airmass.Valid);
+	EXPECT_NEAR(result.Airmass.Result.CylinderAirmass, expectedMass, EPS4D);
+	EXPECT_NEAR(result.NormalizedFilling, 100 * expectedMass / getStandardAirCharge(), EPS4D);
+	EXPECT_FLOAT_EQ(diagnostics.Corrections.Blends[0].BlendParameter, 20);
+	EXPECT_FLOAT_EQ(diagnostics.Corrections.Blends[0].TableYAxis, 75);
+	EXPECT_FLOAT_EQ(diagnostics.Corrections.Blends[1].BlendParameter, 27);
+	EXPECT_FLOAT_EQ(diagnostics.Corrections.Blends[1].TableYAxis, 64);
+	EXPECT_TRUE(diagnostics.Flags & BlendedEstimateEvaluated);
+	EXPECT_TRUE(diagnostics.Flags & BlendedMapEstimateUsed);
+	EXPECT_FLOAT_EQ(result.LambdaLoad.Value, 75);
+	EXPECT_TRUE(result.LambdaLoad.UsesEstimate);
+	EXPECT_FLOAT_EQ(result.IgnitionLoad.Value, 40);
+	EXPECT_FALSE(result.IgnitionLoad.UsesEstimate);
+
+	engineConfiguration->afrOverrideMode = AFR_Tps;
+	engineConfiguration->ignOverrideMode = AFR_AccPedal;
+	result = blended.evaluateAirmass(2400);
+	ASSERT_TRUE(result.Airmass.Valid);
+	EXPECT_FLOAT_EQ(result.LambdaLoad.Value, 20);
+	EXPECT_EQ(result.LambdaLoad.Source, AirmassLoadSource::Tps);
+	EXPECT_FLOAT_EQ(result.IgnitionLoad.Value, 30);
+	EXPECT_EQ(result.IgnitionLoad.Source, AirmassLoadSource::Pedal);
+
+	engineConfiguration->afrOverrideMode = AFR_CylFilling;
+	engineConfiguration->ignOverrideMode = AFR_None;
+	result = blended.evaluateAirmass(2400);
+	ASSERT_TRUE(result.Airmass.Valid);
+	EXPECT_NEAR(result.LambdaLoad.Value, 100 * expectedMass / getStandardAirCharge(), EPS4D);
+	EXPECT_EQ(result.LambdaLoad.Source, AirmassLoadSource::CylinderFilling);
+	EXPECT_FLOAT_EQ(result.IgnitionLoad.Value, 75);
+	EXPECT_EQ(result.IgnitionLoad.Source, AirmassLoadSource::EffectiveMap);
+}
+
+TEST_F(BlendedAirmassTest, EndpointsSkipOnlyUnusedModelInputsAndPreserveFaultPrecedence) {
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	setTable(config->airmassBlendTable, 0);
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	auto sdEndpoint = blended.evaluateAirmass(2200);
+	EXPECT_TRUE(sdEndpoint.Airmass.Valid);
+
+	setTable(config->airmassBlendTable, 100);
+	Sensor::setMockValue(SensorType::Iat, 20);
+	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
+	auto alphaNEndpoint = blended.evaluateAirmass(2200);
+	EXPECT_TRUE(alphaNEndpoint.Airmass.Valid);
+
+	config->sdAirmassMapReady = false;
+	BlendedAirmassDiagnostics readinessDiagnostics;
+	auto missingReadiness = blended.evaluateAirmass(2200, &readinessDiagnostics);
+	EXPECT_FALSE(missingReadiness.Airmass.Valid);
+	EXPECT_EQ(missingReadiness.Fault, AirmassInjectionFault::Configuration);
+	EXPECT_FLOAT_EQ(readinessDiagnostics.RequestedAuthority, 0);
+	EXPECT_FLOAT_EQ(readinessDiagnostics.EffectiveAuthority, 0);
+	config->sdAirmassMapReady = true;
+
+	setTable(config->airmassBlendTable, 50);
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	engine->engineState.sd.tChargeK = 300;
+	BlendedAirmassDiagnostics sensorDiagnostics;
+	auto activeModelInput = blended.evaluateAirmass(2200, &sensorDiagnostics);
+	EXPECT_FALSE(activeModelInput.Airmass.Valid);
+	EXPECT_EQ(activeModelInput.Fault, AirmassInjectionFault::Sensor);
+	EXPECT_FLOAT_EQ(sensorDiagnostics.RequestedAuthority, 50);
+	EXPECT_FLOAT_EQ(sensorDiagnostics.EffectiveAuthority, 0);
+	EXPECT_FALSE(sensorDiagnostics.Flags & BlendedCalculationValid);
+
+	Sensor::setMockValue(SensorType::Iat, 20);
+	config->veBlends[0].blendParameter = GPPWM_Tps;
+	config->veBlends[0].loadBins[2] = config->veBlends[0].loadBins[1];
+	BlendedAirmassDiagnostics correctionDiagnostics;
+	auto invalidCorrection = blended.evaluateAirmass(2200, &correctionDiagnostics);
+	EXPECT_FALSE(invalidCorrection.Airmass.Valid);
+	EXPECT_EQ(invalidCorrection.Fault, AirmassInjectionFault::Correction);
+	EXPECT_FLOAT_EQ(correctionDiagnostics.RequestedAuthority, 50);
+	EXPECT_FLOAT_EQ(correctionDiagnostics.EffectiveAuthority, 0);
+	EXPECT_FALSE(correctionDiagnostics.Flags & BlendedCalculationValid);
+}
+
+TEST_F(BlendedAirmassTest, EvaluatedInvalidRawResultIsDistinctFromMissingInput) {
+	setTable(config->airmassBlendTable, 0);
+	StrictMock<MockVp3d> invalidVe;
+	EXPECT_CALL(invalidVe, getValue(2200, 50)).WillOnce(Return(std::numeric_limits<float>::quiet_NaN()));
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(&invalidVe, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	BlendedAirmassDiagnostics diagnostics;
+	const auto result = blended.evaluateAirmass(2200, &diagnostics);
+	EXPECT_FALSE(result.Airmass.Valid);
+	EXPECT_EQ(result.Fault, AirmassInjectionFault::Result);
+	EXPECT_TRUE(diagnostics.Sd.HasValue);
+	EXPECT_FALSE(diagnostics.Sd.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 0);
+	EXPECT_FLOAT_EQ(diagnostics.EffectiveAuthority, 0);
+	EXPECT_FALSE(diagnostics.Flags & BlendedCalculationValid);
+}
+
+TEST_F(BlendedAirmassTest, EstimatedMapReadinessAndMeasuredOverrideRemainDistinct) {
+	setTable(config->airmassBlendTable, 100);
+	Sensor::setInvalidMockValue(SensorType::Map);
+	StrictMock<MockVp3d> mapEstimate;
+	EXPECT_CALL(mapEstimate, getValue(2300, 20)).Times(2).WillRepeatedly(Return(70));
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	config->mapEstimateReady = false;
+	BlendedAirmassDiagnostics readinessDiagnostics;
+	auto missingEstimateReadiness = blended.evaluateAirmass(2300, &readinessDiagnostics);
+	EXPECT_FALSE(missingEstimateReadiness.Airmass.Valid);
+	EXPECT_EQ(missingEstimateReadiness.Fault, AirmassInjectionFault::Configuration);
+	EXPECT_FLOAT_EQ(readinessDiagnostics.RequestedAuthority, 100);
+	EXPECT_FLOAT_EQ(readinessDiagnostics.EffectiveAuthority, 0);
+
+	config->mapEstimateReady = true;
+	engineConfiguration->afrOverrideMode = AFR_MAP;
+	BlendedAirmassDiagnostics loadDiagnostics;
+	auto missingMeasuredMap = blended.evaluateAirmass(2300, &loadDiagnostics);
+	EXPECT_FALSE(missingMeasuredMap.Airmass.Valid);
+	EXPECT_EQ(missingMeasuredMap.Fault, AirmassInjectionFault::Load);
+	EXPECT_FALSE(missingMeasuredMap.LambdaLoad.Valid);
+	EXPECT_TRUE(missingMeasuredMap.IgnitionLoad.Valid);
+	EXPECT_FLOAT_EQ(loadDiagnostics.RequestedAuthority, 100);
+	EXPECT_FLOAT_EQ(loadDiagnostics.EffectiveAuthority, 0);
+	EXPECT_FALSE(loadDiagnostics.Flags & BlendedCalculationValid);
+}
+
+TEST_F(BlendedAirmassTest, TransientComparisonRequiresEstimateReadinessWhenMeasuredMapWins) {
+	setTable(config->airmassBlendTable, 0);
+	engineConfiguration->useMapEstimateDuringTransient = true;
+	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
+	Sensor::setMockValue(SensorType::Map, 40);
+	StrictMock<MockVp3d> mapEstimate;
+	EXPECT_CALL(mapEstimate, getValue(2300, 20)).Times(2).WillRepeatedly(Return(30));
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	BlendedAirmassDiagnostics diagnostics;
+	config->mapEstimateReady = false;
+	auto missingReadiness = blended.evaluateAirmass(2300, &diagnostics);
+	EXPECT_FALSE(missingReadiness.Airmass.Valid);
+	EXPECT_EQ(missingReadiness.Fault, AirmassInjectionFault::Configuration);
+	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.UsesEstimate);
+	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 0);
+	EXPECT_FLOAT_EQ(diagnostics.EffectiveAuthority, 0);
+
+	config->mapEstimateReady = true;
+	auto ready = blended.evaluateAirmass(2300, &diagnostics);
+	EXPECT_TRUE(ready.Airmass.Valid);
+	EXPECT_FLOAT_EQ(ready.Airmass.Result.EngineLoadPercent, 40);
+	EXPECT_TRUE(diagnostics.Flags & BlendedEstimateEvaluated);
+	EXPECT_FALSE(diagnostics.Flags & BlendedMapEstimateUsed);
+}
+
+TEST_F(BlendedAirmassTest, DryEvaluationDoesNotPublishAndFuelEvaluationIsCoherent) {
+	setTable(config->airmassBlendTable, 25);
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+
+	engine->outputChannels.blendedSdMass = 11;
+	engine->outputChannels.blendedAlphaNMass = 12;
+	engine->outputChannels.blendedRequestedAuthority = 13;
+	engine->outputChannels.blendedEffectiveAuthority = 14;
+	engine->outputChannels.blendedFlags = 15;
+	engine->engineState.currentVe = 16;
+	engine->engineState.veTableYAxis = 17;
+
+	BlendedAirmassDiagnostics diagnostics;
+	EXPECT_TRUE(blended.evaluateAirmass(2500, &diagnostics).Airmass.Valid);
+	EXPECT_NEAR(blended.getAirmass(2500, false).CylinderAirmass, 0.75f * sdMass + 0.25f * alphaNMass, EPS4D);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedSdMass, 11);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedAlphaNMass, 12);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedRequestedAuthority, 13);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedEffectiveAuthority, 14);
+	EXPECT_EQ(engine->outputChannels.blendedFlags, 15);
+	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 16);
+	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 17);
+
+	const auto live = blended.getAirmassForFuel(2500);
+	ASSERT_TRUE(live.Airmass.Valid);
+	EXPECT_NEAR(engine->outputChannels.blendedSdMass, sdMass, EPS4D);
+	EXPECT_NEAR(engine->outputChannels.blendedAlphaNMass, alphaNMass, EPS4D);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedRequestedAuthority, 25);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedEffectiveAuthority, 25);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedSdLoad, 50);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedAlphaNLoad, 20);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedSdVe, 60);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedAlphaNVe, 40);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedCorrection, 1);
+	EXPECT_TRUE(engine->outputChannels.blendedFlags & BlendedCalculationValid);
+	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 0);
+	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 0);
+	EXPECT_FLOAT_EQ(engine->engineState.idleVeTableYAxis, 0);
+}
+
+TEST_F(BlendedAirmassTest, PeriodicFastCallbackPublishesPositiveFuelBeforeGateBecomesReady) {
+	Sensor::setMockValue(SensorType::Rpm, 2500);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::NotReady);
+
+	engine->periodicFastCallback();
+
+	EXPECT_GT(engine->cylinders[0].getInjectionMass(), 0);
+	EXPECT_TRUE(std::isfinite(engine->cylinders[0].getInjectionMass()));
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Ready);
+	EXPECT_TRUE(engine->airmassInjectionState.allowInjection());
+}
+
+TEST_F(BlendedAirmassTest, RequiredSensorFaultBlocksSchedulingDespiteAllFuelAdditions) {
+	setTable(config->airmassBlendTable, 50);
+	engineConfiguration->cranking.baseFuel = 4000;
+	engine->engineState.lua.fuelMult = 2;
+	engine->engineState.lua.fuelAdd = 3;
+	engineConfiguration->tpsAccelLookback = 2;
+	setTable(config->tpsTpsAccelTable, 1);
+	setLinearCurve(config->tpsTspCorrValuesBins, 0, 7000, 1);
+	setArrayValues(config->tpsTspCorrValues, 1);
+	initAccelEnrichment();
+	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
+	engine->module<TpsAccelEnrichment>()->tpsFrom = 0;
+	engine->module<TpsAccelEnrichment>()->tpsTo = 100;
+
+	Sensor::setMockValue(SensorType::Rpm, 200);
+	engine->rpmCalculator.setSpinningUp(getTimeNowNt());
+	engine->rpmCalculator.setRpmValue(200);
+	ASSERT_TRUE(engine->rpmCalculator.isCranking());
+	ASSERT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Ready);
+
+	Sensor::setInvalidMockValue(SensorType::Tps1);
+	engine->periodicFastCallback();
+	EXPECT_GT(engine->engineState.tpsAccelEnrich, 0);
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Latched);
+	EXPECT_EQ(engine->airmassInjectionState.fault(), AirmassInjectionFault::Sensor);
+
+	InjectorContext context;
+	context.outputsMask = 1;
+	const auto now = getTimeNowNt();
+	ScheduledAction pulse[] = {
+			{now + US2NT(1000), {scheduledStartInjection, context}},
+			{now + US2NT(2000), {scheduledEndInjection, context}},
+	};
+	const auto queuedBefore = engine->scheduler.size();
+	EXPECT_FALSE(scheduleFuelCallbacks(pulse, efi::size(pulse)));
+	EXPECT_EQ(engine->scheduler.size(), queuedBefore);
+	EXPECT_EQ(engine->airmassInjectionState.pendingCallbacks(), 0);
+}
+
+TEST_F(BlendedAirmassTest, InvalidStrictFuelConversionBlocksPublicationDespiteAllFuelAdditions) {
+	setTable(config->lambdaTable, 0);
+	engineConfiguration->cranking.baseFuel = 4000;
+	engine->engineState.lua.fuelMult = 2;
+	engine->engineState.lua.fuelAdd = 3;
+	engineConfiguration->tpsAccelLookback = 2;
+	setTable(config->tpsTpsAccelTable, 1);
+	setLinearCurve(config->tpsTspCorrValuesBins, 0, 7000, 1);
+	setArrayValues(config->tpsTspCorrValues, 1);
+	initAccelEnrichment();
+	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
+	engine->module<TpsAccelEnrichment>()->tpsFrom = 0;
+	engine->module<TpsAccelEnrichment>()->tpsTo = 100;
+
+	Sensor::setMockValue(SensorType::Rpm, 200);
+	engine->rpmCalculator.setSpinningUp(getTimeNowNt());
+	engine->rpmCalculator.setRpmValue(200);
+	ASSERT_TRUE(engine->rpmCalculator.isCranking());
+	// setRpmValue runs the live calculation, so the invalid conversion must
+	// already have latched before another fast callback gets a chance to publish.
+	ASSERT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Latched);
+	ASSERT_EQ(engine->airmassInjectionState.fault(), AirmassInjectionFault::Result);
+
+	engine->periodicFastCallback();
+
+	EXPECT_GT(engine->engineState.tpsAccelEnrich, 0);
+	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Latched);
+	EXPECT_EQ(engine->airmassInjectionState.fault(), AirmassInjectionFault::Result);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.getResolvedLambdaLoad(), 0);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedLambdaLoad, 0);
+}
+
+TEST_F(BlendedAirmassTest, NegativeGlobalFuelCorrectionBlocksCompositePublication) {
+	engineConfiguration->globalFuelCorrection = -0.5f;
+	Sensor::setMockValue(SensorType::Rpm, 2500);
+
+	engine->periodicFastCallback();
+
+	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Latched);
+	EXPECT_EQ(engine->airmassInjectionState.fault(), AirmassInjectionFault::Result);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.getResolvedLambdaLoad(), 0);
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedLambdaLoad, 0);
+}
+
+TEST_F(BlendedAirmassTest, LiveStrategyWritesInvalidateCalculationAndLatchAwayBackChange) {
+	Sensor::setMockValue(SensorType::Rpm, 2500);
+	engine->periodicFastCallback();
+	ASSERT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Ready);
+
+	auto token = engine->airmassInjectionState.beginCalculation(
+			LM_SD_ALPHA_N, 2500, engine->getGlobalConfigurationVersion());
+	engine->airmassInjectionState.acceptCalculation();
+	ASSERT_TRUE(engine->airmassInjectionState.isCalculationCurrent(token));
+
+	TunerStudio tunerStudio;
+	::testing::NiceMock<MockTsChannel> channel;
+	constexpr auto modeOffset = offsetof(engine_configuration_s, fuelAlgorithm);
+	uint8_t mode = LM_SPEED_DENSITY;
+	tunerStudio.handleWriteChunkCommand(&channel, modeOffset, sizeof(mode), &mode);
+	mode = LM_SD_ALPHA_N;
+	tunerStudio.handleWriteChunkCommand(&channel, modeOffset, sizeof(mode), &mode);
+
+	EXPECT_EQ(engineConfiguration->fuelAlgorithm, LM_SD_ALPHA_N);
+	EXPECT_FALSE(engine->airmassInjectionState.isCalculationCurrent(token));
+	engine->airmassInjectionState.completeCalculation(token, true);
+	EXPECT_EQ(engine->airmassInjectionState.status(), AirmassInjectionStatus::Latched);
+	EXPECT_EQ(engine->airmassInjectionState.fault(), AirmassInjectionFault::StrategyChange);
+}
+
+TEST_F(BlendedAirmassTest, LambdaLoadStagingPreservesValuesAbovePackedAfrRange) {
+	setTable(config->airmassBlendTable, 100);
+	engineConfiguration->afrOverrideMode = AFR_MAP;
+	engineConfiguration->enableStagedInjection = true;
+	setTable(config->injectorStagingTable, 0);
+	setLinearCurve(config->injectorStagingRpmBins, 0, 5000, 1);
+	config->injectorStagingLoadBins[0] = 0;
+	config->injectorStagingLoadBins[1] = 600;
+	config->injectorStagingLoadBins[2] = 650;
+	config->injectorStagingLoadBins[3] = 700;
+	config->injectorStagingLoadBins[4] = 800;
+	config->injectorStagingLoadBins[5] = 1000;
+	setArrayValues(config->injectorStagingTable[3], 60);
+	Sensor::setMockValue(SensorType::Map, 700);
+	Sensor::setMockValue(SensorType::Rpm, 2500);
+
+	engine->periodicFastCallback();
+
+	EXPECT_FLOAT_EQ(engine->outputChannels.blendedLambdaLoad, 700);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.getResolvedLambdaLoad(), 700);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.afrTableYAxis, 655.35f);
+	EXPECT_FLOAT_EQ(engine->engineState.injectionStage2Fraction, 0.6f);
+}

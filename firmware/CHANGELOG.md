@@ -31,9 +31,10 @@ or
 ## Unreleased
 
 ### Breaking Changes
- - The calibration flash format has changed for independent airmass maps. Back up your tune before updating, then restore and validate it using the matching firmware definition. Disable dedicated airmass tables before importing an unconverted legacy tune; existing ECU flash tunes are not migrated in place.
+ - The calibration flash format has changed for independent airmass maps and blend authority/readiness settings. Back up your tune before updating, then restore and validate it using the matching firmware definition. Disable dedicated airmass tables before importing an unconverted legacy tune; existing ECU flash tunes are not migrated in place.
 
 ### Added
+ - Opt-in SD + Alpha-N air-mass blending with an 8 x 8 RPM/TPS authority table and independent 16 x 16 model maps. Default load remains effective MAP. Activation requires prepared maps, natural VE axes and no shared idle VE table. Required-input faults latch injection off until stopped, drained and explicitly rearmed. Priming and VE Analyze are disabled in composite mode; MAF remains standalone.
  - Optional independent 16 x 16 Alpha-N filling and MAF correction maps, each with its own RPM and load axes. Alpha-N supports fractional TPS breakpoints. Enable dedicated airmass tables only after preparing or converting the selected strategy's calibration; the default remains the legacy shared VE table. Dedicated tables use natural load axes and require the VE load override to be None. Separate TunerStudio editors and VE Analyze bindings follow the selected standalone strategy.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
@@ -56,6 +57,7 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Injection scheduling now reserves every callback in a pulse before accepting it, so a full event queue cannot accept an injector opening without its matching close.
  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
  - STM32F7 dual-bank ECUs no longer stall (potentially stopping the engine) when burning configuration with the engine running - configuration is now committed to flash when the engine is stopped #776
  - SD card log field names now include their category prefix (e.g. `Boost: Target` instead of just `Target`), matching the names shown in TunerStudio

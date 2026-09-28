@@ -119,6 +119,8 @@ struct VeCorrectionDiagnostics {
 // per distinct channel during this pass. No idle overlay or downstream correction.
 VeCorrectionEvaluation
 evaluateAirmassCorrections(const AirmassInputs& inputs, VeCorrectionDiagnostics* diagnostics = nullptr);
+// Live owner delivery without allocating an optional diagnostics array.
+VeCorrectionEvaluation evaluateAirmassCorrectionsForFuel(const AirmassInputs& inputs);
 
 bool isMapEstimateConfigurationValid();
 bool isMapEstimateAxesValid();

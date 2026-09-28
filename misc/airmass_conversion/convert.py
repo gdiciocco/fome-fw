@@ -15,7 +15,9 @@ RPM = [650, 800, 1100, 1400, 1700, 2000, 2300, 2600,
 TPS = [0, 0.5, 1, 2, 3, 5, 7, 10, 15, 20, 30, 40, 55, 70, 85, 100]
 MAF_LOAD = [0, 13, 27, 40, 53, 67, 80, 93, 107, 120, 133, 147, 160, 173, 187, 200]
 NEW_FIELDS = {"alphaNTable", "alphaNTpsBins", "alphaNRpmBins",
-              "mafTable", "mafLoadBins", "mafRpmBins"}
+              "mafTable", "mafLoadBins", "mafRpmBins",
+              "airmassBlendTpsBins", "airmassBlendRpmBins", "airmassBlendTable",
+              "sdAirmassMapReady", "alphaNAirmassMapReady", "mapEstimateReady"}
 MODES = {"Speed Density": "sd", "MAF Air Charge": "maf", "Alpha-N": "alpha-n",
          "0": "sd", "1": "maf", "2": "alpha-n"}
 
@@ -71,21 +73,35 @@ def read_target(path):
         "mafTable": ("[16x16]", Decimal("0.1")),
         "mafLoadBins": ("[16]", Decimal(1)),
         "mafRpmBins": ("[16]", Decimal(1)),
+        "airmassBlendTpsBins": ("[8]", Decimal("0.01")),
+        "airmassBlendRpmBins": ("[8]", Decimal(1)),
+        "airmassBlendTable": ("[8x8]", Decimal(1)),
     }
     occupied = []
     for name, (shape, multiplier) in expected.items():
         fields = [f.strip() for f in declarations.get(name, [])]
-        if (len(fields) < 7 or fields[:2] != ["array", "U16"]
+        data_type = "U08" if name == "airmassBlendTable" else "U16"
+        if (len(fields) < 7 or fields[:2] != ["array", data_type]
                 or fields[3] != shape or scale(fields[5]) != multiplier
                 or number(fields[6]) != 0):
             raise ConversionError(f"Unsupported or missing target declaration: {name}")
         if not fields[2].isdigit():
             raise ConversionError(f"Invalid target offset: {name}")
         start = int(fields[2])
-        end = start + (512 if shape == "[16x16]" else 32)
+        count = 1
+        for dimension in shape.strip("[]").split("x"):
+            count *= int(dimension)
+        end = start + count * (1 if data_type == "U08" else 2)
         if end > int(size[1]) or any(start < b and end > a for a, b in occupied):
             raise ConversionError(f"Target field overlaps or exceeds page bounds: {name}")
         occupied.append((start, end))
+    readiness_offset = max(end for _, end in occupied)
+    if readiness_offset + 4 != int(size[1]) or readiness_offset % 4:
+        raise ConversionError("Unsupported readiness control layout")
+    for bit, name in enumerate(("sdAirmassMapReady", "alphaNAirmassMapReady", "mapEstimateReady")):
+        fields = [f.strip() for f in declarations.get(name, [])]
+        if fields != ["bits", "U32", str(readiness_offset), f"[{bit}:{bit}]", "false", "true"]:
+            raise ConversionError(f"Unsupported readiness declaration: {name}")
     opt_in = [f.strip() for f in declarations.get("useDedicatedAirmassTables", [])]
     if opt_in[:4] != ["bits", "U32", "580", "[5:5]"] or opt_in[4:] != ["false", "true"]:
         raise ConversionError("Target INI lacks the supported dedicated-table opt-in")
@@ -171,6 +187,11 @@ def convert(source, target_signature, target_size):
     add_array(page, tag, "mafTable", old_map if mode == "maf" else [100] * 256, 16, 16, "%", 1)
     add_array(page, tag, "mafLoadBins", old_load if mode == "maf" else MAF_LOAD, 16, 1, "% filling", 0)
     add_array(page, tag, "mafRpmBins", old_rpm if mode == "maf" else RPM, 16, 1, "RPM", 0)
+    add_array(page, tag, "airmassBlendTpsBins", [0, 1, 3, 7, 15, 30, 60, 100], 8, 1, "% TPS", 2)
+    add_array(page, tag, "airmassBlendRpmBins", [800, 1200, 2000, 3000, 4000, 5000, 6000, 8000], 8, 1, "RPM", 0)
+    add_array(page, tag, "airmassBlendTable", [0] * 64, 8, 8, "% Alpha-N", 0)
+    for name in ("sdAirmassMapReady", "alphaNAirmassMapReady", "mapEstimateReady"):
+        ET.SubElement(page, tag, name=name).text = '"false"'
     if opt_in is None:
         opt_in = ET.SubElement(page, tag, name="useDedicatedAirmassTables")
     opt_in.text = '"true"'

@@ -23,7 +23,7 @@ def numbers(node):
 
 
 def target_ini():
-    lines = [f'signature = "{SIGNATURE}"', "nPages = 1", "pageSize = 24888",
+    lines = [f'signature = "{SIGNATURE}"', "nPages = 1", "pageSize = 24988",
              'useDedicatedAirmassTables = bits, U32, 580, [5:5], "false", "true"',
              'veLoadBins = array, U16, 17376, [16], "kPa", 1, 0, 0, 1000, 0',
              'veRpmBins = array, U16, 17408, [16], "RPM", 1, 0, 0, 18000, 0',
@@ -39,6 +39,15 @@ def target_ini():
     ]:
         lines.append(f'{name} = array, U16, {offset}, {shape}, "", {scale}, 0, 0, 1000, 1')
         offset += count * 2
+    for name, shape, scale, count, dtype in [
+        ("airmassBlendTpsBins", "[8]", "0.01", 8, "U16"),
+        ("airmassBlendRpmBins", "[8]", "1", 8, "U16"),
+        ("airmassBlendTable", "[8x8]", "1", 64, "U08"),
+    ]:
+        lines.append(f'{name} = array, {dtype}, {offset}, {shape}, "", {scale}, 0, 0, 100, 0')
+        offset += count * (1 if dtype == "U08" else 2)
+    for bit, name in enumerate(("sdAirmassMapReady", "alphaNAirmassMapReady", "mapEstimateReady")):
+        lines.append(f'{name} = bits, U32, {offset}, [{bit}:{bit}], "false", "true"')
     return "\n".join(lines) + "\n"
 
 
@@ -62,7 +71,7 @@ class ConversionTest(unittest.TestCase):
         ]:
             with self.subTest(mode=mode):
                 source = self.fixture(mode)
-                result, selected = convert.convert(source, SIGNATURE, "24888")
+                result, selected = convert.convert(source, SIGNATURE, "24988")
                 old, new = constants(source), constants(result)
                 self.assertEqual(mode, selected)
                 for name in ("veTable", "veLoadBins", "veRpmBins", "displacement", "fuelAlgorithm", "useSeparateVeForIdle"):
@@ -77,57 +86,62 @@ class ConversionTest(unittest.TestCase):
                 self.assertNotIn("unused580b5", new)
                 root = ET.fromstring(result)
                 self.assertEqual(root.find("m:versionInfo", NS).get("signature"), SIGNATURE)
-                self.assertEqual(root.find('m:page[@number="0"]', NS).get("size"), "24888")
+                self.assertEqual(root.find('m:page[@number="0"]', NS).get("size"), "24988")
 
     def test_complete_placeholder_maps_prevent_stale_import_fields(self):
-        result, _ = convert.convert(self.fixture("sd"), SIGNATURE, "24888")
+        result, _ = convert.convert(self.fixture("sd"), SIGNATURE, "24988")
         data = constants(result)
         self.assertTrue(convert.NEW_FIELDS <= data.keys())
         self.assertEqual(numbers(data["alphaNTable"]), [80] * 256)
         self.assertEqual(numbers(data["mafTable"]), [100] * 256)
+        self.assertEqual(numbers(data["airmassBlendTable"]), [0] * 64)
+        self.assertEqual(numbers(data["airmassBlendTpsBins"]), [0, 1, 3, 7, 15, 30, 60, 100])
+        self.assertEqual(numbers(data["airmassBlendRpmBins"]), [800, 1200, 2000, 3000, 4000, 5000, 6000, 8000])
+        for name in ("sdAirmassMapReady", "alphaNAirmassMapReady", "mapEstimateReady"):
+            self.assertEqual(convert.scalar(data[name]), "false")
         self.assertEqual(numbers(data["alphaNTpsBins"])[:4], [0, convert.number("0.5"), 1, 2])
 
     def test_equivalent_alpha_n_tps_override_becomes_natural_axis(self):
-        result, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24888")
+        result, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24988")
         self.assertEqual(convert.scalar(constants(result)["veOverrideMode"]), "None")
 
     def test_incompatible_overrides_are_rejected(self):
         for value in ('"MAP"', '"Unknown"'):
             with self.subTest(value=value), self.assertRaises(convert.ConversionError):
-                convert.convert(self.changed("veOverrideMode", value), SIGNATURE, "24888")
+                convert.convert(self.changed("veOverrideMode", value), SIGNATURE, "24988")
         root = ET.fromstring(self.fixture("sd"))
         root.find('m:page/m:constant[@name="veOverrideMode"]', NS).text = '"MAP"'
         with self.assertRaises(convert.ConversionError):
-            convert.convert(ET.tostring(root), SIGNATURE, "24888")
+            convert.convert(ET.tostring(root), SIGNATURE, "24988")
 
     def test_wrong_board_is_rejected(self):
         with self.assertRaisesRegex(convert.ConversionError, "same board"):
-            convert.convert(self.fixture("sd"), SIGNATURE.replace("core8", "proteus_f7"), "28888")
+            convert.convert(self.fixture("sd"), SIGNATURE.replace("core8", "proteus_f7"), "28988")
 
     def test_duplicate_constant_is_rejected(self):
         root = ET.fromstring(self.fixture("sd"))
         page = root.find('m:page[@number="0"]', NS)
         page.append(copy.deepcopy(page[0]))
         with self.assertRaisesRegex(convert.ConversionError, "duplicate"):
-            convert.convert(ET.tostring(root), SIGNATURE, "24888")
+            convert.convert(ET.tostring(root), SIGNATURE, "24988")
 
     def test_bad_dimensions_nonfinite_cells_and_rounding_are_rejected(self):
         for payload in [self.changed("veTable", rows="8"), self.changed("veTable", "NaN " * 256),
                         self.changed("veTable", "12.34 " * 256), self.changed("veTable", "9999 " * 256)]:
             with self.subTest(payload=payload[:30]), self.assertRaises(convert.ConversionError):
-                convert.convert(payload, SIGNATURE, "24888")
+                convert.convert(payload, SIGNATURE, "24988")
 
     def test_axis_order_and_tps_range_are_checked(self):
         for axis in ["0 " * 16, " ".join(str(i * 10) for i in range(16)), "1 2 3"]:
             with self.subTest(axis=axis), self.assertRaises(convert.ConversionError):
-                convert.convert(self.changed("veLoadBins", axis), SIGNATURE, "24888")
+                convert.convert(self.changed("veLoadBins", axis), SIGNATURE, "24988")
 
     def test_repeated_conversion_is_deterministic_and_converted_file_is_rejected(self):
-        first, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24888")
-        second, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24888")
+        first, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24988")
+        second, _ = convert.convert(self.fixture("alpha-n"), SIGNATURE, "24988")
         self.assertEqual(first, second)
         with self.assertRaisesRegex(convert.ConversionError, "already exist"):
-            convert.convert(first, SIGNATURE, "24888")
+            convert.convert(first, SIGNATURE, "24988")
 
     def test_existing_dedicated_calibration_is_not_overwritten_even_when_disabled(self):
         root = ET.fromstring(self.fixture("sd"))
@@ -135,20 +149,22 @@ class ConversionTest(unittest.TestCase):
         ET.SubElement(page, f"{{{convert.NS}}}constant", name="alphaNTable").text = "71"
         ET.SubElement(page, f"{{{convert.NS}}}constant", name="useDedicatedAirmassTables").text = '"false"'
         with self.assertRaisesRegex(convert.ConversionError, "already exist"):
-            convert.convert(ET.tostring(root), SIGNATURE, "24888")
+            convert.convert(ET.tostring(root), SIGNATURE, "24988")
 
     def test_target_ini_schema_checks_shape_scale_and_opt_in(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "target.ini"
             path.write_text(target_ini())
-            self.assertEqual(convert.read_target(path), (SIGNATURE, "24888"))
+            self.assertEqual(convert.read_target(path), (SIGNATURE, "24988"))
             for bad in [target_ini().replace("[16x16]", "[8x8]"),
                         target_ini().replace("{1/100}", "1"),
                         target_ini().replace("[5:5]", "[4:4]"),
                         target_ini().replace("veTable = array, U16", "veTable = array, U08"),
                         target_ini().replace("17408", "17376"),
-                        target_ini().replace("pageSize = 24888", "pageSize = 24887"),
-                        target_ini().replace("nPages = 1", "nPages = 2")]:
+                        target_ini().replace("pageSize = 24988", "pageSize = 24987"),
+                        target_ini().replace("nPages = 1", "nPages = 2"),
+                        target_ini().replace("airmassBlendTable = array, U08", "airmassBlendTable = array, U16"),
+                        target_ini().replace("[2:2]", "[3:3]")]:
                 path.write_text(bad)
                 with self.assertRaises(convert.ConversionError):
                     convert.read_target(path)

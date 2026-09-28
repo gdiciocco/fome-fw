@@ -92,7 +92,7 @@
 ! Any time an incompatible change is made to the configuration format stored in flash,
 ! update this string to the current date! It is required to also update TS_SIGNATURE above
 ! when this happens.
-#define FLASH_DATA_VERSION 20025
+#define FLASH_DATA_VERSION 20026
 
 ! this offset is part of console compatibility mechanism, please DO NOT change this offset
 #define TS_FILE_VERSION_OFFSET 124
@@ -469,7 +469,7 @@ uint16_t autoscale benchTestOnTime;Duration of each test pulse;"ms", 0.01, 0, 0,
 
 float cylinderBore;Cylinder diameter in mm.;"mm", 1, 0, 0, 20000, 2
 
-#define engine_load_mode_e_enum "Speed Density", "MAF Air Charge", "Alpha-N", "Lua"
+#define engine_load_mode_e_enum "Speed Density", "MAF Air Charge", "Alpha-N", "Lua", "SD + Alpha-N"
 
 
 custom engine_load_mode_e 1 bits, U08, @OFFSET@, [0:2], @@engine_load_mode_e_enum@@
@@ -1827,6 +1827,18 @@ begin_table
 	table_cols num MAF_RPM_COUNT uint16_t mafRpmBins;;"RPM", 1, 0, 0, 18000, 0
 	table_values uint16_t autoscale mafTable;Correction applied to measured MAF air mass. 100 percent is neutral.;"%", 0.1, 0, 0, 999, 1
 end_table
+
+#define AIRMASS_BLEND_LOAD_COUNT 8
+#define AIRMASS_BLEND_RPM_COUNT 8
+begin_table
+	table_rows num AIRMASS_BLEND_LOAD_COUNT uint16_t autoscale airmassBlendTpsBins;;"% TPS", {1/@@TPS_2_BYTE_PACKING_MULT@@}, 0, 0, 100, 2
+	table_cols num AIRMASS_BLEND_RPM_COUNT uint16_t airmassBlendRpmBins;;"RPM", 1, 0, 0, 18000, 0
+	table_values uint8_t airmassBlendTable;Alpha-N contribution to calculated air mass. 0 percent uses SD only. 100 percent uses Alpha-N only. Default fueling load remains effective MAP at every weight.;"% Alpha-N", 1, 0, 0, 100, 0
+end_table
+
+	bit sdAirmassMapReady;Confirm the SD map and downstream MAP-based load tables are calibrated for the intended blended operating range. Default false.
+	bit alphaNAirmassMapReady;Confirm the Alpha-N map is calibrated for its intended contribution to the blended operating range. Default false.
+	bit mapEstimateReady;Confirm the TPS/RPM MAP estimate is calibrated for this engine. Required when blended operation needs the estimate, including transient selection. Default false.
 end_struct
 
 ! Pedal Position Sensor

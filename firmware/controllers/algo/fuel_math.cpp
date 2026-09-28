@@ -25,6 +25,7 @@
 
 #include "airmass.h"
 #include "alphan_airmass.h"
+#include "blended_airmass.h"
 #include "maf_airmass.h"
 #include "speed_density_airmass.h"
 #include "fuel_math.h"
@@ -136,6 +137,7 @@ float getRunningFuel(float baseFuel) {
 static SpeedDensityAirmass sdAirmass(nullptr, mapEstimationTable);
 static MafAirmass mafAirmass;
 static AlphaNAirmass alphaNAirmass;
+static BlendedAirmass blendedAirmass(sdAirmass, alphaNAirmass);
 
 AirmassModelBase* getAirmassModel(engine_load_mode_e mode) {
 	switch (mode) {
@@ -145,6 +147,8 @@ AirmassModelBase* getAirmassModel(engine_load_mode_e mode) {
 			return &mafAirmass;
 		case LM_ALPHA_N:
 			return &alphaNAirmass;
+		case LM_SD_ALPHA_N:
+			return &blendedAirmass;
 #if EFI_LUA
 		case LM_LUA:
 			return &(getLuaAirmassModel());
@@ -159,9 +163,61 @@ AirmassModelBase* getAirmassModel(engine_load_mode_e mode) {
 	}
 }
 
-// Per-cylinder base fuel mass
+static float getBlendedBaseFuelMass(float rpm) {
+	engine->outputChannels.blendedLambdaLoad = 0;
+	engine->fuelComputer.resetResolvedLambdaLoad();
+	const auto evaluation = blendedAirmass.getAirmassForFuel(rpm);
+	if (!evaluation.Airmass.Valid) {
+		engine->fuelComputer.sdAirMassInOneCylinder = 0;
+		engine->fuelComputer.normalizedCylinderFilling = 0;
+		engine->fuelComputer.afrTableYAxis = 0;
+		engine->fuelComputer.targetLambda = 0;
+		engine->fuelComputer.targetAFR = 0;
+		engine->engineState.fuelingLoad = 0;
+		engine->engineState.ignitionLoad = 0;
+		engine->engineState.airflowEstimate = 0;
+		engine->engineState.baseFuel = 0;
+		engine->airmassInjectionState.rejectCalculation(evaluation.Fault);
+		return 0;
+	}
+	const auto& airmass = evaluation.Airmass.Result;
+	engine->fuelComputer.sdAirMassInOneCylinder = airmass.CylinderAirmass;
+	engine->fuelComputer.normalizedCylinderFilling = evaluation.NormalizedFilling;
+	engine->engineState.fuelingLoad = airmass.EngineLoadPercent;
+	engine->engineState.ignitionLoad = evaluation.IgnitionLoad.Value;
+	const float gramsPerCycle = airmass.CylinderAirmass * engine->engineState.cylinderCount;
+	engine->engineState.airflowEstimate = gramsPerCycle / getEngineCycleDuration(rpm) * 3600000 / 1000;
+	float baseFuelMass = engine->fuelComputer.getCycleFuelWithResolvedLoad(
+			airmass.CylinderAirmass, rpm, evaluation.LambdaLoad.Value);
+	const float globalCorrection = engineConfiguration->globalFuelCorrection;
+	if (!std::isfinite(globalCorrection) || globalCorrection < 0 || !std::isfinite(baseFuelMass) || baseFuelMass < 0) {
+		engine->engineState.baseFuel = 0;
+		engine->fuelComputer.resetResolvedLambdaLoad();
+		engine->airmassInjectionState.rejectCalculation(AirmassInjectionFault::Result);
+		return 0;
+	}
+	baseFuelMass *= globalCorrection;
+	if (!std::isfinite(baseFuelMass)) {
+		engine->engineState.baseFuel = 0;
+		engine->fuelComputer.resetResolvedLambdaLoad();
+		engine->airmassInjectionState.rejectCalculation(AirmassInjectionFault::Result);
+		return 0;
+	}
+	engine->outputChannels.blendedLambdaLoad = evaluation.LambdaLoad.Value;
+	engine->engineState.baseFuel = baseFuelMass;
+	// engine2 still owns the final readiness transition after all per-cylinder
+	// fuel quantities and durations have been checked and published.
+	engine->airmassInjectionState.acceptCalculation();
+	return baseFuelMass;
+}
+
+// Per-cylinder base fuel mass. Keep the larger composite result in a separate
+// call frame so legacy modes retain their compact standalone calculation path.
 static float getBaseFuelMass(float rpm) {
 	ScopePerf perf(PE::GetBaseFuel);
+	if (engineConfiguration->fuelAlgorithm == LM_SD_ALPHA_N) {
+		return getBlendedBaseFuelMass(rpm);
+	}
 	if (!validateAirmassConfiguration()) {
 		return 0;
 	}

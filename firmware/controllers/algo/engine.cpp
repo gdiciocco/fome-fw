@@ -218,6 +218,7 @@ void Engine::OnTriggerSynchronizationLost() {
 	efiPrintf("engine stopped");
 
 	rpmCalculator.setStopSpinning();
+	airmassInjectionState.onEngineStop();
 
 	triggerCentral.triggerState.resetState();
 	triggerCentral.instantRpm.resetInstantRpm();

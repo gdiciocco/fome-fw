@@ -73,6 +73,12 @@ bool isRawAirmassConfigurationValid() {
 }
 
 bool validateAirmassConfiguration() {
+	if (engineConfiguration->fuelAlgorithm == LM_SD_ALPHA_N) {
+		// Composite readiness belongs to its live fuel owner and injection gate.
+		// A stopped engine may be configuring maps; do not create a fatal legacy
+		// error before a fresh positive-RPM calculation can classify readiness.
+		return true;
+	}
 	if (const auto* error = getAirmassConfigurationError()) {
 		firmwareError(ObdCode::CUSTOM_ERR_ASSERT, "%s", error);
 		return false;
@@ -369,7 +375,8 @@ private:
 };
 } // namespace
 
-VeCorrectionEvaluation evaluateAirmassCorrections(const AirmassInputs& inputs, VeCorrectionDiagnostics* diagnostics) {
+static VeCorrectionEvaluation
+evaluateAirmassCorrectionsImpl(const AirmassInputs& inputs, VeCorrectionDiagnostics* diagnostics, bool postState) {
 	if (diagnostics) {
 		diagnostics->HasValue = false;
 		diagnostics->Valid = false;
@@ -400,6 +407,9 @@ VeCorrectionEvaluation evaluateAirmassCorrections(const AirmassInputs& inputs, V
 		if (diagnostics) {
 			diagnostics->Blends[i] = result;
 		}
+		if (postState) {
+			publishBlend(i, result);
+		}
 	}
 	evaluation.Valid = evaluation.Valid && std::isfinite(evaluation.Multiplier) && evaluation.Multiplier >= 0;
 	if (diagnostics) {
@@ -407,4 +417,12 @@ VeCorrectionEvaluation evaluateAirmassCorrections(const AirmassInputs& inputs, V
 		diagnostics->Valid = evaluation.Valid;
 	}
 	return evaluation;
+}
+
+VeCorrectionEvaluation evaluateAirmassCorrections(const AirmassInputs& inputs, VeCorrectionDiagnostics* diagnostics) {
+	return evaluateAirmassCorrectionsImpl(inputs, diagnostics, false);
+}
+
+VeCorrectionEvaluation evaluateAirmassCorrectionsForFuel(const AirmassInputs& inputs) {
+	return evaluateAirmassCorrectionsImpl(inputs, nullptr, true);
 }
