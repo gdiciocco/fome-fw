@@ -96,5 +96,8 @@ MafAirmass::evaluateAirmassImpl(float massAirFlow, float rpm, const DiagnosticsT
 }
 
 float MafAirmass::getVeImpl(float rpm, percent_t load) const {
+	if (engineConfiguration->useDedicatedAirmassTables) {
+		return interpolate3d(config->mafTable, config->mafLoadBins, load, config->mafRpmBins, rpm);
+	}
 	return interpolate3d(config->veTable, config->veLoadBins, load, config->veRpmBins, rpm);
 }

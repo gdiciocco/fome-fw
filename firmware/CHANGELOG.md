@@ -30,7 +30,11 @@ or
 
 ## Unreleased
 
+### Breaking Changes
+ - The calibration flash format has changed for independent airmass maps. Back up your tune before updating, then restore and validate it using the matching firmware definition. Disable dedicated airmass tables before importing an unconverted legacy tune; existing ECU flash tunes are not migrated in place.
+
 ### Added
+ - Optional independent 16 x 16 Alpha-N filling and MAF correction maps, each with its own RPM and load axes. Alpha-N supports fractional TPS breakpoints. Enable dedicated airmass tables only after preparing or converting the selected strategy's calibration; the default remains the legacy shared VE table. Dedicated tables use natural load axes and require the VE load override to be None. Separate TunerStudio editors and VE Analyze bindings follow the selected standalone strategy.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load

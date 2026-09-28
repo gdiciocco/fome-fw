@@ -6,6 +6,55 @@
 AirmassVeModelBase::AirmassVeModelBase(const ValueProvider3D* veTable)
 	: m_veTable(veTable) {}
 
+template <typename T, size_t N>
+static bool isAxisValid(const T (&axis)[N], float maximum) {
+	// Unsigned packed storage guarantees finite, nonnegative values. With a
+	// strictly ascending axis, checking the last bin bounds the whole axis.
+	if (axis[N - 1] > maximum) {
+		return false;
+	}
+	for (size_t i = 1; i < N; i++) {
+		if (axis[i] <= axis[i - 1]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static const char* getAirmassConfigurationError() {
+	if (!engineConfiguration->useDedicatedAirmassTables) {
+		return nullptr;
+	}
+	if (engineConfiguration->veOverrideMode != VE_None) {
+		return "Dedicated airmass tables require VE load override None";
+	}
+	if (!isAxisValid(config->alphaNTpsBins, 100)) {
+		return "Alpha-N TPS axis must be ascending in 0..100 percent";
+	}
+	if (!isAxisValid(config->alphaNRpmBins, 18000)) {
+		return "Alpha-N RPM axis must be ascending in 0..18000 RPM";
+	}
+	if (!isAxisValid(config->mafLoadBins, 1000)) {
+		return "MAF load axis must be ascending in 0..1000 percent";
+	}
+	if (!isAxisValid(config->mafRpmBins, 18000)) {
+		return "MAF RPM axis must be ascending in 0..18000 RPM";
+	}
+	return nullptr;
+}
+
+bool isAirmassConfigurationValid() {
+	return getAirmassConfigurationError() == nullptr;
+}
+
+bool validateAirmassConfiguration() {
+	if (const auto* error = getAirmassConfigurationError()) {
+		firmwareError(ObdCode::CUSTOM_ERR_ASSERT, "%s", error);
+		return false;
+	}
+	return true;
+}
+
 static float getVeLoadAxis(ve_override_e mode, float passedLoad, bool& valid) {
 	switch (mode) {
 		case VE_None:
@@ -32,6 +81,12 @@ VeEvaluation AirmassVeModelBase::evaluateVe(float rpm, float load, VeDiagnostics
 }
 
 VeEvaluation AirmassVeModelBase::evaluateVe(float rpm, float load, const DiagnosticsTarget& diagnostics) const {
+	// Check live edits before interpolation without changing fault state in a dry
+	// query. The live fuel owner, boot and burn paths report configuration errors.
+	if (!isAirmassConfigurationValid()) {
+		return {};
+	}
+
 	bool valid = std::isfinite(rpm);
 	// Override the load value if necessary
 	load = getVeLoadAxis(engineConfiguration->veOverrideMode, load, valid);

@@ -162,6 +162,9 @@ AirmassModelBase* getAirmassModel(engine_load_mode_e mode) {
 // Per-cylinder base fuel mass
 static float getBaseFuelMass(float rpm) {
 	ScopePerf perf(PE::GetBaseFuel);
+	if (!validateAirmassConfiguration()) {
+		return 0;
+	}
 
 	// airmass modes - get airmass first, then convert to fuel
 	auto model = getAirmassModel(engineConfiguration->fuelAlgorithm);

@@ -6,6 +6,11 @@ struct blend_table_s;
 
 class ValueProvider3D;
 
+// Queries must not change engine fault state. The live fuel owner and config
+// application use the fatal validator; model evaluations use the pure predicate.
+bool isAirmassConfigurationValid();
+bool validateAirmassConfiguration();
+
 struct AirmassResult {
 	mass_t CylinderAirmass = 0;
 	percent_t EngineLoadPercent = 100;
@@ -48,7 +53,8 @@ struct MapEvaluation {
 struct AirmassEvaluation {
 	AirmassResult Result;
 	// Describes usable inputs/results separately from legacy numeric fault fallbacks.
-	// Configuration readiness and composite fault policy are not evaluated here.
+	// Table compatibility is checked; calibration quality and composite fault
+	// policy are not evaluated here.
 	bool Valid = false;
 };
 

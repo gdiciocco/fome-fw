@@ -42,5 +42,8 @@ AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm, const DiagnosticsTar
 }
 
 float AlphaNAirmass::getVeImpl(float rpm, percent_t load) const {
+	if (engineConfiguration->useDedicatedAirmassTables) {
+		return interpolate3d(config->alphaNTable, config->alphaNTpsBins, load, config->alphaNRpmBins, rpm);
+	}
 	return interpolate3d(config->veTable, config->veLoadBins, load, config->veRpmBins, rpm);
 }
