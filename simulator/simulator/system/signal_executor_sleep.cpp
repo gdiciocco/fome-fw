@@ -84,7 +84,8 @@ bool SleepExecutor::scheduleBatch(const ScheduledAction* events, size_t count) {
 
 	// Arm all future events before executing any already-due action.
 	for (size_t i = 0; i < count; i++) {
-		int delaySt = MY_US2ST(NT2US(events[i].time - getTimeNowNt()));
+		auto now = getTimeNowNt();
+		int delaySt = events[i].time <= now ? 0 : MY_US2ST(NT2US(events[i].time - now));
 		if (delaySt > 0) {
 			chVTSetI(&contexts[i]->scheduling->timer, delaySt, (vtfunc_t)timerCallback, contexts[i]);
 			contexts[i] = nullptr;

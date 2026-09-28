@@ -26,8 +26,10 @@ bool isScheduleBatchValid(const ScheduledAction* events, size_t count, efitick_t
 	}
 
 	for (size_t i = 0; i < count; i++) {
-		// Comparing timestamps first avoids subtracting an arbitrary past timestamp.
-		if (!events[i].action || (events[i].time >= now && events[i].time >= now + US2NT(MaximumScheduleDelayUs)) ||
+		// Unsigned distance avoids signed overflow for arbitrary rejected timestamps.
+		uint64_t forward = static_cast<uint64_t>(events[i].time.count) - static_cast<uint64_t>(now.count);
+		if (!events[i].action ||
+			(events[i].time >= now && forward >= static_cast<uint64_t>(US2NT(MaximumScheduleDelayUs).count())) ||
 			(i > 0 && events[i].time < events[i - 1].time)) {
 			return false;
 		}
