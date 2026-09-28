@@ -40,6 +40,7 @@ TESTS_SRC_CPP = \
 	tests/ignition_injection/test_odd_firing_engine.cpp \
 	tests/ignition_injection/test_paired_wasted_spark.cpp \
 	tests/ignition_injection/test_airmass_evaluation.cpp \
+	tests/ignition_injection/test_airmass_context.cpp \
 	tests/ignition_injection/test_dedicated_airmass_tables.cpp \
 	tests/lua/test_lua_basic.cpp \
 	tests/lua/test_lookup.cpp \

@@ -17,6 +17,9 @@ public:
 
 	float getMap(float rpm, bool postState) const;
 	MapEvaluation evaluateMap(float rpm) const;
+	void captureInputs(float rpm, AirmassInputs& inputs) const;
+	AirmassEvaluation
+	evaluateRawAirmass(const AirmassInputs& inputs, RawAirmassDiagnostics* diagnostics = nullptr) const;
 
 private:
 	AirmassEvaluation evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const;

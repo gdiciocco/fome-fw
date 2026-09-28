@@ -43,7 +43,38 @@ AirmassEvaluation AlphaNAirmass::evaluateAirmass(float rpm, const DiagnosticsTar
 
 float AlphaNAirmass::getVeImpl(float rpm, percent_t load) const {
 	if (engineConfiguration->useDedicatedAirmassTables) {
-		return interpolate3d(config->alphaNTable, config->alphaNTpsBins, load, config->alphaNRpmBins, rpm);
+		return getDedicatedVeImpl(rpm, load);
 	}
 	return interpolate3d(config->veTable, config->veLoadBins, load, config->veRpmBins, rpm);
+}
+
+float AlphaNAirmass::getDedicatedVeImpl(float rpm, float load) const {
+	return interpolate3d(config->alphaNTable, config->alphaNTpsBins, load, config->alphaNRpmBins, rpm);
+}
+
+AirmassEvaluation
+AlphaNAirmass::evaluateRawAirmass(const AirmassInputs& inputs, RawAirmassDiagnostics* diagnostics) const {
+	if (diagnostics) {
+		diagnostics->HasValue = false;
+		diagnostics->Valid = false;
+	}
+	AirmassEvaluation evaluation;
+	if (!inputs.DedicatedTables || !inputs.ConfigurationValid || !std::isfinite(inputs.Rpm) || inputs.Rpm <= 0 ||
+		!inputs.Tps || !std::isfinite(inputs.Tps.Value) || inputs.Tps.Value < 0 || inputs.Tps.Value > 100 ||
+		!std::isfinite(inputs.Displacement) || inputs.Displacement <= 0 || !std::isfinite(inputs.CylinderCount) ||
+		inputs.CylinderCount <= 0 || (inputs.AlphaNUseIat && !inputs.Iat)) {
+		return evaluation;
+	}
+	// Preserve the standalone reference and +273 temperature convention. A missing
+	// requested IAT is invalid here, unlike the legacy standalone 20 C fallback.
+	const float temperature = (inputs.AlphaNUseIat ? inputs.Iat.Value : 20.0f) + 273;
+	if (!std::isfinite(temperature) || temperature <= 0) {
+		return evaluation;
+	}
+	auto ve = evaluateRawVe(inputs.Rpm, inputs.Tps.Value, diagnostics);
+	const float mass =
+			getAirmassImpl(ve.Ve * PERCENT_DIV, 101.325f, temperature, inputs.Displacement, inputs.CylinderCount);
+	evaluation.Result = {mass, inputs.Tps.Value};
+	evaluation.Valid = ve.Valid && std::isfinite(mass) && mass >= 0;
+	return evaluation;
 }

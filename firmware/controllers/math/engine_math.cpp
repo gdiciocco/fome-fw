@@ -210,11 +210,15 @@ BlendResult calculateBlend(blend_table_s& cfg, float rpm, float load) {
 		load = readGppwmChannel(cfg.yAxisOverride).value_or(0);
 	}
 
+	return calculateBlend(cfg, rpm, load, value.Value);
+}
+
+BlendResult calculateBlend(const blend_table_s& cfg, float rpm, float load, float blendParameter) {
 	float tableValue = interpolate3d(cfg.table, cfg.loadBins, load, cfg.rpmBins, rpm);
 
-	float blendFactor = interpolate2d(value.Value, cfg.blendBins, cfg.blendValues);
+	float blendFactor = interpolate2d(blendParameter, cfg.blendBins, cfg.blendValues);
 
-	return {value.Value, blendFactor, 0.01f * blendFactor * tableValue, load};
+	return {blendParameter, blendFactor, 0.01f * blendFactor * tableValue, load};
 }
 
 #endif /* EFI_ENGINE_CONTROL */

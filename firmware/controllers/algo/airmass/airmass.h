@@ -3,6 +3,7 @@
 #include "rusefi_types.h"
 struct blend_table_s;
 #include "engine_math.h"
+#include <rusefi/expected.h>
 
 class ValueProvider3D;
 
@@ -50,6 +51,79 @@ struct MapEvaluation {
 	bool UsesEstimate = false;
 };
 
+// One capture for a future composite calculation. Sensor acquisition is sequential,
+// not atomic. Maps remain in configuration storage and must not be copied here.
+// Optional inputs retain their own validity: an unused input cannot fail a model.
+struct AirmassInputs {
+	float Rpm = 0;
+	expected<float> MeasuredMap = unexpected;
+	expected<float> Tps = unexpected;
+	expected<float> Pedal = unexpected;
+	expected<float> Iat = unexpected;
+	MapEvaluation EffectiveMap;
+	float ChargeTemperatureK = 0;
+	float Displacement = 0;
+	float CylinderCount = 0;
+	float PreviousFuelingLoad = 0;
+	float PreviousIgnitionLoad = 0;
+	load_override_e LambdaOverride = AFR_None;
+	load_override_e IgnitionOverride = AFR_None;
+	bool AlphaNUseIat = false;
+	bool DedicatedTables = false;
+	bool ConfigurationValid = false;
+};
+
+struct RawAirmassDiagnostics {
+	float TableValue = 0;
+	bool HasValue = false;
+	bool Valid = false;
+};
+
+enum class AirmassLoadSource : uint8_t {
+	Invalid,
+	EffectiveMap,
+	MeasuredMap,
+	Tps,
+	Pedal,
+	CylinderFilling
+};
+enum class AirmassLoadUnit : uint8_t {
+	Kpa,
+	Percent
+};
+
+struct AirmassLoad {
+	float Value = 0;
+	AirmassLoadSource Source = AirmassLoadSource::Invalid;
+	AirmassLoadUnit Unit = AirmassLoadUnit::Percent;
+	bool Valid = false;
+	bool UsesEstimate = false;
+};
+
+// Pure resolution: never re-read sensors or apply legacy numeric failure fallbacks.
+AirmassLoad resolveAirmassLoad(const AirmassInputs& inputs, mass_t finalMass, load_override_e selector);
+
+struct VeCorrectionEvaluation {
+	float Multiplier = 1;
+	bool Valid = false;
+};
+
+struct VeCorrectionDiagnostics {
+	BlendResult Blends[VE_BLEND_COUNT] = {};
+	bool HasValue = false;
+	bool Valid = false;
+};
+
+// Call once after input capture, before publishing any new load. Core inputs and
+// previous loads come from the capture; other configured channels are sampled once
+// per distinct channel during this pass. No idle overlay or downstream correction.
+VeCorrectionEvaluation
+evaluateAirmassCorrections(const AirmassInputs& inputs, VeCorrectionDiagnostics* diagnostics = nullptr);
+
+bool isMapEstimateConfigurationValid();
+bool isMapEstimateAxesValid();
+bool isRawAirmassConfigurationValid();
+
 struct AirmassEvaluation {
 	AirmassResult Result;
 	// Describes usable inputs/results separately from legacy numeric fault fallbacks.
@@ -77,6 +151,9 @@ public:
 	virtual float getVeImpl(float /*rpm*/, percent_t /*load*/) const;
 
 protected:
+	VeEvaluation evaluateRawVe(float rpm, float load, RawAirmassDiagnostics* diagnostics) const;
+	virtual float getDedicatedVeImpl(float rpm, float load) const;
+
 	// Legacy wrappers select live delivery. Public evaluations only select optional
 	// capture, so neither dry nor live calculations need a diagnostics array local.
 	class DiagnosticsTarget {
