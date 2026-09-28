@@ -19,3 +19,19 @@ schfunc_t action_s::getCallback() const {
 void* action_s::getArgument() const {
 	return m_param;
 }
+
+bool isScheduleBatchValid(const ScheduledAction* events, size_t count, efitick_t now) {
+	if (!events || count == 0 || count > MaxScheduleBatchSize) {
+		return false;
+	}
+
+	for (size_t i = 0; i < count; i++) {
+		// Comparing timestamps first avoids subtracting an arbitrary past timestamp.
+		if (!events[i].action || (events[i].time >= now && events[i].time >= now + US2NT(MaximumScheduleDelayUs)) ||
+			(i > 0 && events[i].time < events[i - 1].time)) {
+			return false;
+		}
+	}
+
+	return true;
+}
