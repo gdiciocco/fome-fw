@@ -1,5 +1,8 @@
 # Convert a legacy FOME airmass calibration
 
+For the complete operator workflow in Italian, see the
+[airmass maps and blending guide](../../docs/user/blended-airmass-it.md).
+
 This tool prepares an MSQ for the optional dedicated standalone tables. It
 preserves the original strategy, its complete 16 x 16 map and both axes. Other
 new strategy maps receive the same placeholder defaults as firmware. Those

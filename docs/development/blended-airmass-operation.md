@@ -1,5 +1,7 @@
 # SD + Alpha-N operation
 
+Guida operativa completa in italiano: [controlli, mappe e procedure](../user/blended-airmass-it.md).
+
 This document describes the composite implementation on `feature/blended-airmass`.
 See [input contracts](airmass-input-contracts.md) for the model, correction and
 load boundaries. Engine calibration and comparative engine qualification remain

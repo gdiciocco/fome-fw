@@ -1,5 +1,7 @@
 # Stage 2: independent standalone airmass tables
 
+Guida operativa completa in italiano: [controlli, mappe e procedure](../user/blended-airmass-it.md).
+
 Implemented after the compact evaluation refactor (`642704d219`), on
 `feature/blended-airmass`. This stage provides independent calibration for the
 three existing strategies. Shared input capture and SD/Alpha-N mass blending
