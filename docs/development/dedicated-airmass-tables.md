@@ -1,5 +1,10 @@
 # Stage 2: independent standalone airmass tables
 
+Capoworks uses a separate flag bit and flash version. See the
+[Capoworks integration](capoworks-blended-airmass-integration.md) for its
+combined layout and validation; the standalone stage figures below remain
+historical evidence.
+
 Implemented after the compact evaluation refactor (`642704d219`), on
 `feature/blended-airmass`. This stage provides independent calibration for the
 three existing strategies. Shared input capture and SD/Alpha-N mass blending
