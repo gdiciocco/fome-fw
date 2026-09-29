@@ -41,6 +41,11 @@ public:
 		}
 	}
 
+	bool scheduleBatch(const ScheduledAction*, size_t) override {
+		ADD_FAILURE() << "Trigger promotion must use individual scheduling";
+		return false;
+	}
+
 	void cancel(scheduling_s*) override {}
 };
 

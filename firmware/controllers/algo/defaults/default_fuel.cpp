@@ -45,6 +45,25 @@ static void setDefaultVETable() {
 	setRpmTableBin(config->veRpmBins);
 	setTable(config->veTable, 80);
 
+	// Presets and imported legacy tunes continue to use veTable until explicitly
+	// converted. These independent maps are starting points, not engine calibrations.
+	engineConfiguration->useDedicatedAirmassTables = false;
+	setRpmTableBin(config->alphaNRpmBins);
+	copyArray(
+			config->alphaNTpsBins,
+			{0.0f, 0.5f, 1.0f, 2.0f, 3.0f, 5.0f, 7.0f, 10.0f, 15.0f, 20.0f, 30.0f, 40.0f, 55.0f, 70.0f, 85.0f, 100.0f});
+	setTable(config->alphaNTable, 80);
+	setRpmTableBin(config->mafRpmBins);
+	setLinearCurve(config->mafLoadBins, 0, 200, 1);
+	setTable(config->mafTable, 100);
+
+	copyArray(config->airmassBlendTpsBins, {0.0f, 1.0f, 3.0f, 7.0f, 15.0f, 30.0f, 60.0f, 100.0f});
+	copyArray(config->airmassBlendRpmBins, {800, 1200, 2000, 3000, 4000, 5000, 6000, 8000});
+	setTable(config->airmassBlendTable, 0);
+	config->sdAirmassMapReady = false;
+	config->alphaNAirmassMapReady = false;
+	config->mapEstimateReady = false;
+
 	setRpmTableBin(config->baroCorrRpmBins);
 	setLinearCurve(config->baroCorrPressureBins, 75, 105, 1);
 

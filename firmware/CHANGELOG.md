@@ -32,10 +32,13 @@ or
 
 ### Breaking Changes
  - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
+ - The calibration flash format has changed for independent airmass maps and blend authority/readiness settings. Back up your tune before updating, then restore and validate it using the matching firmware definition. Disable dedicated airmass tables before importing an unconverted legacy tune; existing ECU flash tunes are not migrated in place.
 
 ### Added
  - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
  - Add `adc_stats` console diagnostics for fast ADC and software knock: conversion starts, completed buffers, skipped starts by reason, and ADC errors.
+ - Opt-in SD + Alpha-N air-mass blending with an 8 x 8 RPM/TPS authority table and independent 16 x 16 model maps. Default load remains effective MAP. Activation requires prepared maps, natural VE axes and no shared idle VE table. Required-input faults latch injection off until stopped, drained and explicitly rearmed. Priming and VE Analyze are disabled in composite mode; MAF remains standalone.
+ - Optional independent 16 x 16 Alpha-N filling and MAF correction maps, each with its own RPM and load axes. Alpha-N supports fractional TPS breakpoints. Enable dedicated airmass tables only after preparing or converting the selected strategy's calibration; the default remains the legacy shared VE table. Dedicated tables use natural load axes and require the VE load override to be None. Separate TunerStudio editors and VE Analyze bindings follow the selected standalone strategy.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
@@ -48,6 +51,7 @@ or
  - Brake pedal switch input can now be inverted, for vehicles where the brake switch pulls the input low when the pedal is pressed
  - New CAN VSS type "AUMOVIO MK 100 UHP" for the Continental/AUMOVIO MK 100 UHP ABS module, decoding vehicle speed, all four wheel speeds, brake pedal state, and IMU data (lateral/longitudinal/vertical acceleration and yaw rate)
  - New VVT mode "Honda J 6-2" for the Honda J-series V6 intake cam, which has six evenly spaced tooth slots with two of them missing, giving one distinct wide gap per cam revolution.
+ - Cooling fans can be turned off above a set vehicle speed ("Disable above speed") #827
  - Flex fuel ethanol content is now correct immediately at startup, instead of ramping up from 0% over the first second while the sensor's filter settles. The last valid reading is stored in backup RAM, and used to prime the filter at startup as well as any time the sensor is failed - the fuel in the tank can't change while the ECU isn't watching. If no value was stored and the sensor is dead, the fallback is configurable: "Failed flex sensor ethanol content", defaulting to 50%.
 
 
@@ -65,6 +69,10 @@ or
  - Fixed board settings are now greyed out throughout TunerStudio, including the full pinout pages, and protected when loading tunes. This prevents CRC errors caused by editing values that the ECU immediately restores. Hardware revision dependent settings remain editable where the board permits them.
  - MC33816 initialization now respects the selected SPI bus. VVT applies its cranking RPM limit without changing the saved calibration.
  - Prevent an ADC panic when fast ADC or software knock sampling overlaps the previous conversion's completion callback.
+ - Flat 100% Alpha-N authority now stays exactly at the endpoint during RPM/TPS interpolation, preventing false composite configuration faults and unintended evaluation of the SD model.
+ - Composite injection state and latched fault labels in TunerStudio now follow live output channels.
+ - A failed start that never reports positive RPM now reaches the stopped state after trigger timeout, allowing explicit rearm of latched composite injection faults.
+ - Injection scheduling now reserves every callback in a pulse before accepting it, so a full event queue cannot accept an injector opening without its matching close.
  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
  - ETB and DC wastegate outputs are inhibited during blocking calibration burns, and resume only after fresh sensor samples and a new control cycle #726
  - Calibration burns now verify the stored bytes and CRC before replacing the remaining valid copy; failed writes keep the burn pending and require a new request to retry
@@ -82,6 +90,7 @@ or
  - DC wastegate control now disables the motor bridge when position feedback or the requested output is invalid, instead of trying to drive the motor with an invalid value.
  - MAP cylinder balancing no longer corrupts the MAP reading above 255 kPa. Engines running more than ~22 psi of boost could see reported MAP jump anywhere between 60 and 440 kPa while actual manifold pressure was steady, throwing fuel and ignition off badly at high load.
  - Fix updating wideband O2 sensor modules with older firmware
+ - DFCO "After cut timing ramp-in time" is now actually respected, rather than ignored and using 0.5s. #819
 
 ## May 2026 Release
 

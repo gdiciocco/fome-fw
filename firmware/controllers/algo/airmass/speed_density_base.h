@@ -23,4 +23,6 @@ protected:
 
 public:
 	static mass_t getAirmassImpl(float ve, float manifoldPressure, float temperature);
+	static mass_t
+	getAirmassImpl(float ve, float manifoldPressure, float temperature, float displacement, float cylinderCount);
 };

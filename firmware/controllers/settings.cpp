@@ -443,6 +443,14 @@ static void setValue(const char* paramStr, const char* valueStr) {
 	engine->resetEngineSnifferIfInTestMode();
 }
 
+static void rearmAirmass() {
+	efiPrintf(
+			"%s",
+			engine->airmassInjectionState.rearm()
+					? "Airmass injection rearmed; awaiting fresh fuel calculation"
+					: "Airmass rearm refused: engine must be stopped and accepted fuel callbacks drained");
+}
+
 void initSettings() {
 #if EFI_SIMULATOR
 	printf("initSettings\n");
@@ -453,6 +461,7 @@ void initSettings() {
 	addConsoleActionF("set_whole_timing_map", setWholeTimingMapCmd);
 
 	addConsoleAction("stopengine", (Void)scheduleStopEngine);
+	addConsoleAction("rearm_airmass", rearmAirmass);
 
 	addConsoleActionS(CMD_ENABLE, enable);
 	addConsoleActionS(CMD_DISABLE, disable);
