@@ -57,6 +57,7 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Flat 100% Alpha-N authority now stays exactly at the endpoint during RPM/TPS interpolation, preventing false composite configuration faults and unintended evaluation of the SD model.
  - Composite injection state and latched fault labels in TunerStudio now follow live output channels.
  - A failed start that never reports positive RPM now reaches the stopped state after trigger timeout, allowing explicit rearm of latched composite injection faults.
  - Injection scheduling now reserves every callback in a pulse before accepting it, so a full event queue cannot accept an injector opening without its matching close.

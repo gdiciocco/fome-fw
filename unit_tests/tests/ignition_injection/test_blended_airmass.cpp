@@ -133,6 +133,96 @@ TEST_F(BlendedAirmassTest, AuthorityMapUsesTpsRowsAndRpmColumnsWithClampedEdges)
 	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 99);
 }
 
+TEST_F(BlendedAirmassTest, FlatAuthorityEndpointsStayExactAcrossFractionalInputs) {
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	BlendedAirmassDiagnostics diagnostics;
+
+	for (float endpoint : {0, 100}) {
+		setTable(config->airmassBlendTable, endpoint);
+		// A rounded endpoint must not silently evaluate the unused model.
+		engine->engineState.sd.tChargeK = endpoint == 100 ? std::numeric_limits<float>::quiet_NaN() : 300;
+		if (endpoint == 0) {
+			Sensor::setInvalidMockValue(SensorType::Iat);
+		} else {
+			Sensor::setMockValue(SensorType::Iat, 20);
+		}
+		const auto check = [&](float rpm) {
+			SCOPED_TRACE(rpm);
+			const auto result = blended.evaluateAirmass(rpm, &diagnostics);
+			ASSERT_TRUE(result.Airmass.Valid);
+			EXPECT_EQ(result.Fault, AirmassInjectionFault::None);
+			EXPECT_EQ(diagnostics.RequestedAuthority, endpoint);
+			EXPECT_EQ(diagnostics.EffectiveAuthority, endpoint);
+			EXPECT_EQ((diagnostics.Flags & BlendedSdEvaluated) != 0, endpoint == 0);
+			EXPECT_EQ((diagnostics.Flags & BlendedAlphaNEvaluated) != 0, endpoint == 100);
+		};
+		for (float tps : {0.0f, 0.01f, 0.33333f, 1.01f, 3.33f, 6.9f, 15.33f, 59.99f, 99.01f, 99.99f, 100.0f}) {
+			SCOPED_TRACE(tps);
+			Sensor::setMockValue(SensorType::Tps1, tps);
+			// The old weighted-sum interpolation gives 100.0000076 and
+			// 99.9999924 respectively at these RPMs with TPS zero.
+			for (float rpm : {100.125f, 900.8125f, 902.3125f, 9000.125f}) {
+				check(rpm);
+			}
+			for (size_t i = 0; i < AIRMASS_BLEND_RPM_COUNT - 1; i++) {
+				const float low = config->airmassBlendRpmBins[i];
+				const float high = config->airmassBlendRpmBins[i + 1];
+				for (float fraction : {0.00001f, 0.25203125f, 0.25578125f, 0.51f, 0.99999f}) {
+					check(low + (high - low) * fraction);
+				}
+			}
+		}
+	}
+}
+
+TEST_F(BlendedAirmassTest, LocalAuthorityPlateausStayAtExactEndpoints) {
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	Sensor::setMockValue(SensorType::Tps1, 99.99f);
+
+	for (float endpoint : {0, 100}) {
+		setTable(config->airmassBlendTable, 50);
+		for (size_t row : {6, 7}) {
+			for (size_t column : {0, 1}) {
+				config->airmassBlendTable[row][column] = endpoint;
+			}
+		}
+		for (float rpm : {900.8125f, 902.3125f}) {
+			BlendedAirmassDiagnostics diagnostics;
+			ASSERT_TRUE(blended.evaluateAirmass(rpm, &diagnostics).Airmass.Valid);
+			EXPECT_EQ(diagnostics.RequestedAuthority, endpoint);
+			EXPECT_EQ((diagnostics.Flags & BlendedSdEvaluated) != 0, endpoint == 0);
+			EXPECT_EQ((diagnostics.Flags & BlendedAlphaNEvaluated) != 0, endpoint == 100);
+		}
+	}
+}
+
+TEST_F(BlendedAirmassTest, FractionalAuthorityNearEndpointsStillEvaluatesBothModels) {
+	setTable(config->airmassBlendTable, 0);
+	config->airmassBlendTable[7][0] = 100;
+	config->airmassBlendTable[7][1] = 100;
+	StrictMock<MockVp3d> mapEstimate;
+	SpeedDensityAirmass sd(nullptr, mapEstimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+
+	for (float tps : {60.0001f, 99.9999f}) {
+		Sensor::setMockValue(SensorType::Tps1, tps);
+		BlendedAirmassDiagnostics diagnostics;
+		ASSERT_TRUE(blended.evaluateAirmass(900.8125f, &diagnostics).Airmass.Valid);
+		EXPECT_GT(diagnostics.RequestedAuthority, 0);
+		EXPECT_LT(diagnostics.RequestedAuthority, 100);
+		EXPECT_NEAR(diagnostics.RequestedAuthority, (tps - 60) / 40 * 100, 0.00001f);
+		EXPECT_TRUE(diagnostics.Flags & BlendedSdEvaluated);
+		EXPECT_TRUE(diagnostics.Flags & BlendedAlphaNEvaluated);
+	}
+}
+
 TEST_F(BlendedAirmassTest, CorrectionsApplyOnceAndLoadsResolveFromFinalComposite) {
 	engineConfiguration->useMapEstimateDuringTransient = true;
 	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;

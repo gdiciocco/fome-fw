@@ -38,6 +38,18 @@ bool isBlendedAirmassConfigurationValid() {
 	return true;
 }
 
+static float interpolateAuthority(float tps, float rpm) {
+	const auto row = priv::getBin(tps, config->airmassBlendTpsBins);
+	const auto column = priv::getBin(rpm, config->airmassBlendRpmBins);
+	const auto& table = config->airmassBlendTable;
+	// Difference form preserves flat 0/100 stencils exactly. Weighted sums can
+	// round a flat 100 above its limit or below the branch-skipping endpoint.
+	const auto interpolate = [](float low, float high, float fraction) { return low + (high - low) * fraction; };
+	const float left = interpolate(table[row.Idx][column.Idx], table[row.Idx + 1][column.Idx], row.Frac);
+	const float right = interpolate(table[row.Idx][column.Idx + 1], table[row.Idx + 1][column.Idx + 1], row.Frac);
+	return interpolate(left, right, column.Frac);
+}
+
 class BlendedAirmass::DiagnosticsTarget {
 public:
 	explicit DiagnosticsTarget(BlendedAirmassDiagnostics* capture)
@@ -211,15 +223,13 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	if (!inputs.Tps || !std::isfinite(inputs.Tps.Value) || inputs.Tps.Value < 0 || inputs.Tps.Value > 100) {
 		return fail(AirmassInjectionFault::Sensor);
 	}
-	const float authority = interpolate3d(
-			config->airmassBlendTable,
-			config->airmassBlendTpsBins,
-			inputs.Tps.Value,
-			config->airmassBlendRpmBins,
-			inputs.Rpm);
-	if (!std::isfinite(authority) || authority < 0 || authority > 100) {
+	const float interpolatedAuthority = interpolateAuthority(inputs.Tps.Value, inputs.Rpm);
+	if (!std::isfinite(interpolatedAuthority)) {
 		return fail(AirmassInjectionFault::Configuration);
 	}
+	// Configuration validation already bounds every cell. Contain rounding at
+	// the domain edges without snapping legitimate fractional authority.
+	const float authority = clampF(0, interpolatedAuthority, 100);
 	diagnostics.authority(authority);
 	if (inputs.EffectiveMap.HasValue && !config->mapEstimateReady) {
 		return fail(AirmassInjectionFault::Configuration);
