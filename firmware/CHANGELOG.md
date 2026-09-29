@@ -48,6 +48,7 @@ or
  - Brake pedal switch input can now be inverted, for vehicles where the brake switch pulls the input low when the pedal is pressed
  - New CAN VSS type "AUMOVIO MK 100 UHP" for the Continental/AUMOVIO MK 100 UHP ABS module, decoding vehicle speed, all four wheel speeds, brake pedal state, and IMU data (lateral/longitudinal/vertical acceleration and yaw rate)
  - New VVT mode "Honda J 6-2" for the Honda J-series V6 intake cam, which has six evenly spaced tooth slots with two of them missing, giving one distinct wide gap per cam revolution.
+ - Cooling fans can be turned off above a set vehicle speed ("Disable above speed") #827
  - Flex fuel ethanol content is now correct immediately at startup, instead of ramping up from 0% over the first second while the sensor's filter settles. The last valid reading is stored in backup RAM, and used to prime the filter at startup as well as any time the sensor is failed - the fuel in the tank can't change while the ECU isn't watching. If no value was stored and the sensor is dead, the fallback is configurable: "Failed flex sensor ethanol content", defaulting to 50%.
 
 
@@ -73,6 +74,7 @@ or
  - Fix conflict between aux temp 2 and oil temperature sensor configuration
  - MAP cylinder balancing no longer corrupts the MAP reading above 255 kPa. Engines running more than ~22 psi of boost could see reported MAP jump anywhere between 60 and 440 kPa while actual manifold pressure was steady, throwing fuel and ignition off badly at high load.
  - Fix updating wideband O2 sensor modules with older firmware
+ - DFCO "After cut timing ramp-in time" is now actually respected, rather than ignored and using 0.5s. #819
 
 ## May 2026 Release
 
