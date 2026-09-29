@@ -103,7 +103,10 @@ def read_target(path):
         if fields != ["bits", "U32", str(readiness_offset), f"[{bit}:{bit}]", "false", "true"]:
             raise ConversionError(f"Unsupported readiness declaration: {name}")
     opt_in = [f.strip() for f in declarations.get("useDedicatedAirmassTables", [])]
-    if opt_in[:4] != ["bits", "U32", "580", "[5:5]"] or opt_in[4:] != ["false", "true"]:
+    # Standalone feature layout uses bit 5. Capoworks preserves its shock/EMP
+    # flags at bits 5/6 and places the dedicated-map switch in spare bit 26.
+    if (opt_in[:3] != ["bits", "U32", "580"] or len(opt_in) != 6
+            or opt_in[3] not in ("[5:5]", "[26:26]") or opt_in[4:] != ["false", "true"]):
         raise ConversionError("Target INI lacks the supported dedicated-table opt-in")
     board(signature[1])
     return signature[1], size[1]
@@ -196,8 +199,11 @@ def convert(source, target_signature, target_size):
         opt_in = ET.SubElement(page, tag, name="useDedicatedAirmassTables")
     opt_in.text = '"true"'
     constants["veOverrideMode"].text = '"None"'
-    if "unused580b5" in constants:
-        page.remove(constants["unused580b5"])
+    # Remove obsolete reserved-bit aliases from either reviewed source layout.
+    # Named shock/EMP settings remain untouched even when they share this word.
+    for alias in ("unused580b5", "unused580b26"):
+        if alias in constants:
+            page.remove(constants[alias])
     page.set("size", target_size)
     version.set("signature", target_signature)
     # Other metadata and every unrelated constant retain their original values.

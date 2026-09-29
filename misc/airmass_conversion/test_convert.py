@@ -22,9 +22,9 @@ def numbers(node):
     return [convert.number(v) for v in node.text.split()]
 
 
-def target_ini():
+def target_ini(opt_in_bit=5):
     lines = [f'signature = "{SIGNATURE}"', "nPages = 1", "pageSize = 24988",
-             'useDedicatedAirmassTables = bits, U32, 580, [5:5], "false", "true"',
+             f'useDedicatedAirmassTables = bits, U32, 580, [{opt_in_bit}:{opt_in_bit}], "false", "true"',
              'veLoadBins = array, U16, 17376, [16], "kPa", 1, 0, 0, 1000, 0',
              'veRpmBins = array, U16, 17408, [16], "RPM", 1, 0, 0, 18000, 0',
              'veTable = array, U16, 17440, [16x16], "%", 0.1, 0, 0, 999, 1']
@@ -184,6 +184,47 @@ class ConversionTest(unittest.TestCase):
             self.assertEqual(refused.returncode, 2)
             self.assertEqual(source.read_bytes(), original)
             self.assertEqual(output.read_bytes(), converted)
+
+    def test_capoworks_bit26_preserves_named_flags_and_removes_reserved_aliases(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ini = Path(folder) / "capoworks.ini"
+            ini.write_text(target_ini(26) +
+                           'enableShockPreload = bits, U32, 580, [5:5], "false", "true"\n' +
+                           'enableEmpPump = bits, U32, 580, [6:6], "false", "true"\n')
+            signature, size = convert.read_target(ini)
+            for mode in ("sd", "alpha-n", "maf"):
+                for shock, pump in (("true", "false"), ("false", "true")):
+                    with self.subTest(mode=mode, shock=shock, pump=pump):
+                        root = ET.fromstring(self.fixture(mode))
+                        page = root.find('m:page[@number="0"]', NS)
+                        preserved = {"enableShockPreload": f'"{shock}"',
+                                     "enableEmpPump": f'"{pump}"',
+                                     "shockPreloadCommandTarget": "37",
+                                     "empPump_canBus": "1"}
+                        for name, value in {**preserved, "unused580b26": '"true"'}.items():
+                            ET.SubElement(page, f"{{{convert.NS}}}constant", name=name).text = value
+                        source = ET.tostring(root)
+                        result, selected = convert.convert(source, signature, size)
+                        data = constants(result)
+                        self.assertEqual(mode, selected)
+                        for name, value in preserved.items():
+                            self.assertEqual(value, data[name].text)
+                        self.assertNotIn("unused580b5", data)
+                        self.assertNotIn("unused580b26", data)
+                        self.assertEqual("true", convert.scalar(data["useDedicatedAirmassTables"]))
+                        self.assertEqual(numbers(constants(source)["veTable"]), numbers(data["veTable"]))
+
+    def test_unknown_opt_in_bit_or_word_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            ini = Path(folder) / "unsupported.ini"
+            layouts = [target_ini(bit) for bit in (4, 6, 25, 27)]
+            layouts += [target_ini(26).replace("[26:26]", "[26:27]"),
+                        target_ini(26).replace("bits, U32, 580,", "bits, U32, 584,")]
+            for layout in layouts:
+                with self.subTest(layout=layout.splitlines()[3]):
+                    ini.write_text(layout)
+                    with self.assertRaisesRegex(convert.ConversionError, "dedicated-table opt-in"):
+                        convert.read_target(ini)
 
 
 if __name__ == "__main__":
