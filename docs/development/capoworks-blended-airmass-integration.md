@@ -1,5 +1,37 @@
 # Capoworks blended airmass integration
 
+## Revision integration (2026-09-30)
+
+Capoworks now includes `feature/blended-airmass` through `35bb993512`.
+Dedicated SD/Alpha-N/MAF maps, independent consumer loads, Idle VE ownership,
+shared temperature choice, standalone MAP multiplication and pure Alpha-N BARO
+compensation follow the [accepted revision](blended-airmass-revision.md) and
+[operator guide](../user/blended-airmass-it.md). Automatic conversion tools are
+removed. The previous integration record below is historical.
+
+The merge retains Capoworks shock/EMP enable bits and the retired dedicated-map
+bit at its original bit 26. Persistent configuration grows by 60 bytes, from
+25088 to 25148 on Core8. Flash format is 260930: old binary tunes are rejected;
+restore calibration manually with the matching INI. Output channels grow from
+1444 to 1564 bytes, with blocking factor 1600 to include protocol overhead.
+
+Both branches contain the same full-width MLG fix. Trigger lifecycle, burn
+verification, ADC lifecycle, DC output validity and HPFP pending-close guards
+are preserved. Airmass dependency checks now honor both VVT minimum RPM and
+the Capoworks cranking threshold; the added boundary regression ensures an
+inactive VVT source cannot block fuel. Both branches’ VVT/HPFP tests are retained.
+
+The combined host suite passes **987/987 tests in 164 suites**, and the two
+ADC lifecycle suites pass **36/36 and 21/21**. The five Capoworks HPFP lifecycle
+fixtures now explicitly provide measured MAP for their independent target source;
+their stop/restart assertions remain in place.
+
+Current integration build/test/deployment evidence is archived under
+`/home/deffie/fome-artifacts/blended-airmass/capoworks-integration-2026-09-30/`.
+This directory is separate from the standalone branch’s qualification evidence.
+
+## Previous integration (2026-09-29)
+
 Integration source: `7a0bf148df`, recorded on 2026-09-29; the subsequent
 MLG logger fix is `8ffd996cc6`. The merge brings
 `feature/blended-airmass` at `9fa5c6c8d0`, including upstream master

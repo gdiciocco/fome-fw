@@ -2,10 +2,23 @@
 
 ## Status and scope
 
-Design started on 2026-09-27. Stage 1 separates model evaluation from diagnostic
-publication, with compact numeric results and optional diagnostic capture.
-Independent calibration maps and the SD + Alpha-N mode remain planned work;
-the new mode is not yet available in firmware or TunerStudio.
+Design started on 2026-09-27. The branch now implements independent model maps,
+shared input capture and SD + Alpha-N blending. Software, ARM build and isolated
+Core8 bench evidence is recorded in [validation](blended-airmass-validation.md).
+Engine calibration and comparative engine qualification remain outstanding.
+
+The [2026-09-29 revision requirements](blended-airmass-revision.md) define the
+current revision: dedicated maps by default, simpler activation and names, an
+explicit MAP-estimate policy, independent load selection for every consumer,
+Idle VE with a selectable load axis, Tcharge/IAT selection shared by both
+blended models, optional MAP multiplication for standalone Alpha-N only,
+optional barometric compensation for pure Alpha-N before blending, and qualified
+endpoint VE Analyze. MAP-estimate barometric normalisation is recorded separately
+as a study requiring qualification before adoption.
+They take precedence over conflicting
+first-delivery decisions below. Table resizing is excluded. Implementation of these revisions is in progress, with verification tracked in
+[the implementation record](blended-airmass-implementation.md). Earlier stage-3
+results below qualify only the first delivery.
 
 - Branch: `feature/blended-airmass`.
 - Base: upstream `FOME-Tech/fome-fw` `master`, fetched on 2026-09-27,
@@ -21,6 +34,14 @@ the new mode is not yet available in firmware or TunerStudio.
 The first implementation uses 16 x 16 strategy maps. An 8 x 8 authority table
 controls the transition between SD and Alpha-N. These are separate dimensions:
 the authority table does not limit either model's calibration to 8 x 8.
+
+On 2026-09-28 the project objective was expanded: qualify the owner's naturally
+aspirated ITB engine while providing an architecture useful to FOME upstream.
+[Air estimation and load architecture](airmass-architecture.md) defines that
+direction, the boundaries of the first delivery and comparative acceptance
+criteria. The design below records the original implementation sequence and
+its initial MAP load default. The revision requirements define the next
+contract for independently selected consumer loads and sensor dependencies.
 
 ## Prior work
 
@@ -50,9 +71,11 @@ The earlier preparatory commit
 is also useful: model-specific `getVeImpl()` methods are a better ownership
 pattern than switching on global `fuelAlgorithm` inside the common VE helper.
 
-## Current code and constraints
+## Original baseline and constraints
 
-Paths in this section are relative to the repository root.
+This table describes the pre-feature baseline used for the original design;
+it is not an inventory of today's implemented branch. Paths are relative to
+the repository root.
 
 | Area | Current behavior and relevant source |
 | --- | --- |
@@ -68,7 +91,10 @@ Paths in this section are relative to the repository root.
 | Calibration | `firmware/integration/fome_config.txt`: main VE is 16 x 16; existing `blend_table_s` is 8 x 8 and is shared with ignition and boost. |
 | Storage | `firmware/controllers/flash_main.cpp`: CRC, version and container size validate the stored tune. Appending fields alone does not preserve a stored binary tune across an update. |
 
-## Design decisions
+## First-delivery design decisions
+
+These decisions document the first delivery. Apply the linked revision
+requirements when planning changes to its controls and load routing.
 
 ### 1. Explicit mode and independent maps
 
@@ -112,6 +138,17 @@ At 0%, evaluate only SD for mass; at 100%, evaluate only Alpha-N for mass.
 Evaluate both inside the transition. Inputs needed for the authority lookup or
 the final load remain required even when one mass branch is inactive.
 
+Stage 1 does not yet provide that shared input context or a raw-model path:
+each evaluator still obtains its inputs and applies the existing VE corrections.
+Add a compact input capture and separate raw model evaluation from the common
+correction pass before composing models. Do not achieve this by changing global
+settings temporarily. Preserve standalone evaluation semantics through adapters.
+
+Keep authority evaluation separate from air estimation. RPM/TPS weighting is the
+first calibrated policy, not an estimate of sensor confidence. Pressure-relative
+ITB policies may follow after qualification of MAP sampling, barometric changes
+and high-throttle pressure dips; no universal MAP/baro switch is assumed.
+
 Start with a table containing 0% Alpha-N contribution. Enabling blending must
 not implicitly enable an uncalibrated second model. Treat map preparation and
 activation as explicit tuning steps.
@@ -128,18 +165,64 @@ For boosted applications, qualify the chosen Alpha-N operating region separately
 RPM/TPS alone does not identify different boost pressures at the same operating
 point. Additional pressure compensation is a separate calibration/design choice.
 
-### 3. One final load and one publisher
+### 3. Explicit load sources and one publisher
 
-In composite mode, the default fueling load is **effective SD MAP in kPa**,
-independent of the authority weight. Reuse the SD MAP result, including any
-accepted estimate/transient handling; do not read a different MAP for the final
-load. Never interpolate MAP kPa with TPS percent.
+For the first composite delivery, the default fueling load is **effective SD
+MAP in kPa**, independent of the authority weight. This is a compatibility
+default, not a requirement that every future composite use MAP. Reuse the SD
+MAP result, including any accepted estimate/transient handling; do not read a
+different MAP for the same load source. Never interpolate MAP kPa with TPS percent.
 
 Existing AFR and ignition load overrides can still select TPS or normalized
 cylinder filling explicitly. Normalized filling is calculated from the final
 mass before these overrides are evaluated. Switching from standalone Alpha-N
 to composite therefore requires reviewing every default-load calibration, not
 only the two main maps.
+
+Resolve composite load sources from the calculation context, with explicit
+units, validity and provenance. Today `IFuelComputer::getLoadOverride(AFR_MAP)`
+re-reads raw MAP with a numeric failure fallback; preserve that behavior for
+legacy callers, but do not silently use it as the composite load contract.
+For the composite, default lambda/ignition load uses captured effective MAP;
+an explicit `AFR_MAP` override retains its measured-MAP meaning, using the
+captured sensor value. TPS, pedal and final-filling overrides retain their
+declared sources. Required override inputs must be valid: legacy numeric
+fallbacks such as 200 kPa or 100% do not make a composite input valid. A valid
+MAP estimate cannot satisfy an explicitly measured-MAP override.
+
+Audit injection phase, cylinder trims, STFT regions, VVT, lambda monitoring,
+GPPWM and OBD as well as lambda and ignition. Selecting TPS for lambda and
+ignition alone does not remove dependencies through `fuelingLoad` or corrections.
+The required revision below replaces a possible global default-load selector
+with independent selectors for every consumer. Until implemented and validated,
+the current composite retains its MAP default. A sensor is required because an
+active model, policy or consumer uses it; never silently change a table's axis
+in response to sensor loss.
+
+#### Required revision: independent load selection for every consumer
+
+User requirement confirmed on 2026-09-29; this is planned behavior, not a claim
+about the current firmware. Every consumer of composite load must have its own
+independent source selection, including effective MAP (kPa) and TPS (percent).
+A single global MAP/TPS selector does not meet this requirement.
+
+Audit all direct and indirect uses, including injection phase, each cylinder's
+fuel trim, STFT regions, each VVT table, lambda targets, ignition tables and
+corrections, staging, lambda monitoring, GPPWM and load-based thresholds or
+control logic. Existing selectors can satisfy the requirement where they are
+already independent; consumers currently inheriting another function's load
+must also be independently configurable. Record every consumer and its routing
+before implementing the selectors; the examples above are not an exhaustive list.
+
+Each editor, live cursor, unit label and threshold must use the source selected
+for that consumer. Changing one selection must not change another consumer's
+source, the model map axes or the blending authority. Migration must preserve
+existing effective sources and require deliberate recalibration when the source
+changes; relabeling an existing numerical axis is not a calibration conversion.
+Sensor dependencies follow the union of active models, policy and consumers.
+Changing all downstream selections to TPS does not remove MAP requirements from
+an active SD branch or other pressure-dependent calculations. Qualification must
+cover mixed selections, independent routing, units and required-input faults.
 
 Separate per-model calculation from final state publication. Keep the numeric
 result compact: mass, native load, validity and any additional scalar required
@@ -171,10 +254,25 @@ be interpreted as both SD efficiency and Alpha-N filling, especially after
 importing an Alpha-N tune. Preserve its existing behavior in standalone modes.
 Supporting dedicated per-strategy idle tables can be a later, separate change.
 
+Include idle bypass airflow in engine qualification: fixed TPS with a changing
+idle-valve opening can change cylinder charge. Neither an idle VE override nor
+a second main map alone establishes that airflow. Permit SD- or Alpha-N-dominant
+idle as calibrated, and test accessory load, warm-up and return to idle. If the
+existing model cannot cover bypass changes, qualify a separate bypass-air model
+or correction before claiming support for that operating envelope; avoid counting
+the same bypass air both in SD mass and as an additional mass term.
+
 Evaluate existing `veBlends` once in composite mode, using composite MAP load
 unless a correction has an explicit Y-axis override. Apply their product once
 to the blended mass. Keep their placement and semantics unchanged for legacy
 standalone modes. Publish their diagnostics once.
+
+Define the sampling stage of correction inputs as well as their units. Existing
+GPPWM fuel/ignition-load channels read previously published state during VE
+evaluation. Preserve that timing explicitly where retained; do not publish a
+partial SD result merely to feed a correction in the Alpha-N branch. A correction
+using final filling would otherwise introduce a circular dependency if that same
+correction changes the mass from which filling is calculated.
 
 Endpoint tests must distinguish raw mass from the whole fueling pipeline:
 at 0% and 100%, raw composite mass must match the corresponding individual
@@ -183,47 +281,36 @@ a standalone Alpha-N tune with TPS-based target lambda or corrections, because
 composite mode intentionally retains MAP-based default load. Test common
 corrections separately; do not promise unconditional pulse-width equivalence.
 
-### 5. Calibration compatibility and conversion
+### 5. Calibration compatibility and manual restoration
 
-Keep existing `veTable`, `veLoadBins` and `veRpmBins` names and storage intact.
-Append the Alpha-N and MAF tables, their independent axes, authority table and
-new controls without shifting old fields wherever possible. Check generated
-offsets rather than assuming that appending inside a nested struct is harmless.
+Dedicated maps are now unconditional. Existing SD storage retains its names;
+Alpha-N and MAF have separate maps with fixed native axes. Main VE axis override
+and manual map-readiness declarations are retired. No automatic conversion
+script or binary tune migration is delivered.
 
-Add an explicit opt-in for dedicated strategy tables, defaulting to disabled:
+Keep an untouched backup of the old TunerStudio project, MSQ and matching INI.
+Use them as the source for a manual restore in a separate project with the new
+firmware definition. Copy the appropriate map and both axes; compare each field
+by meaning, units and representable range. See the
+[operator procedure](../user/blended-airmass-it.md).
 
-- Disabled: all existing standalone modes use the original shared table and
-  overrides, preserving imported legacy tune behavior.
-- Enabled: SD uses existing storage, Alpha-N and MAF use their dedicated maps.
-- Composite mode requires dedicated tables and a valid supported configuration.
+A native SD/MAP calibration can keep its VE cells if temperature and pressure
+policies match. A TPS-indexed legacy SD map cannot be relabeled as MAP: standalone
+Alpha-N with Multiply MAP and the same temperature reproduces its mass formula,
+but downstream table sources and corrections must also match. Pure Alpha-N,
+hybrid Alpha-N and the blended Alpha-N branch require explicit calibration review.
+A legacy fixed-temperature Alpha-N map is not automatically equivalent to either
+selected measured IAT or estimated Tcharge.
 
-The unused bit `unused580b5` is a candidate for the opt-in control, preserving
-the engine configuration size. Verify its generated offset and all consumers
-before repurposing it. The existing three-bit `fuelAlgorithm` field can encode
-the new value without widening the field.
+Restore source selectors independently. In particular, staging previously
+followed lambda, while ignition trims and knock often followed ignition. Selecting
+Model default now is an independent native-model choice. Missing MSQ keys retain
+old project values, so a blind legacy import cannot initialize this revision.
 
-Audit engine presets and default-map helpers as part of this step. Presets such
-as BMW M73 and the Miata variants write the legacy VE fields directly; keep their
-default behavior intact, and initialize new tables without claiming that a flat
-default is a calibrated alternative model.
-
-Conversion is an explicit stopped-engine operation. From a legacy Alpha-N or
-MAF tune, copy the original map and both axes to that strategy's dedicated map
-before reusing the original storage for a calibrated SD map. From a legacy SD
-tune, retain its table and prepare Alpha-N separately. Never convert MAP bins
-to TPS by relabeling them or assume the same cell values calibrate both models.
-
-Do not infer an old MSQ from missing new keys: importing into a project can
-leave previous values for absent fields. Provide a reproducible conversion
-procedure/tool with legacy SD, Alpha-N and MAF fixtures, preserving the original
-MSQ. Require disabled blending/dedicated-table mode before legacy import unless
-the conversion tool explicitly supplies the new settings.
-
-Binary flash migration is not part of the first implementation. A format
-change must update the required version/signature and release notes. Record
-that firmware update requires tune backup and validated restore/conversion.
-Append-only layout is useful for old field names and offsets, but is not a
-claim of in-place binary compatibility.
+The firmware signature and generated page size identify the new layout. Stable
+old offsets do not imply binary compatibility. Verify hardware settings, source
+choices, maps, axes and corrections; burn, power cycle and save a fresh MSQ for
+comparison. Table resizing remains excluded.
 
 ### 6. Invalid inputs and activation
 
@@ -268,9 +355,13 @@ cannot be established, this stage is not complete. This avoids introducing an
 unrelated general scheduler cancellation mechanism as a prerequisite.
 
 At a mass endpoint, a failed unused mass branch must not matter. Effective MAP
-is still needed for the final composite load at 100% Alpha-N. A MAP estimate is
-usable only when its own TPS input and calibration are valid. In particular,
-do not silently use zero TPS when both MAP and TPS have failed.
+is still needed at 100% Alpha-N in the first release because its default load
+and potentially other consumers use MAP. This dependency may be removed only
+for a separately audited explicit load configuration. A MAP estimate is usable
+only when its own TPS input and calibration are valid. In particular, do not
+silently use zero TPS when both MAP and TPS have failed. Numeric validity,
+measured-versus-estimated source, and calibration coverage are distinct; a
+finite result is not evidence that a model is accurate at that operating point.
 
 ## Resource budget and UI
 
@@ -313,7 +404,9 @@ binding is qualified, disable analysis for that dedicated mode. Initially disabl
 automatic map analysis in composite mode. Qualify endpoint-only tuning later,
 with one active model, stable authority and understood downstream corrections.
 
-## Development sequence
+## Original development sequence
+
+For the next iteration, use the [revision sequence](blended-airmass-revision.md#development-and-acceptance).
 
 Keep each change buildable and reviewable, following `CONTRIBUTING.md`.
 Use one integration branch initially; split PRs only at independently useful,
@@ -325,7 +418,8 @@ diagnostics and failure handling are complete.
 | 0 | Record baseline, map call paths, finalize this design and existing-test gaps. | Astra high; Sol high for build/config inventory | Exact base SHA, baseline results and known limitations. |
 | 1 | Separate model table selection and calculation diagnostics from publication without changing existing behavior. | Astra high implementation; Sol high source review; Astra high test review | Regression tests for SD, Alpha-N, MAF, overrides, idle VE, corrections and Lua dry reads. |
 | 2 | Add independent tables/axes, defaults, explicit opt-in and import/conversion support. Add standalone editors and analyzer bindings. | Sol high; Astra high reviews compatibility | Old MSQ fixtures retain behavior; dedicated maps use their own axes; each analyzer writes only its active map; generated layout/INI checks and resource delta. |
-| 3 | Implement composite calculation, fixed final load, correction placement and validated authority. | Astra high | Endpoint/intermediate mass tests, unchanged model physics, one publisher and one correction pass. |
+| 2a | Add shared input capture, raw model/correction separation and explicit composite load resolution. | Astra high; Sol high audits consumers/tests | Legacy parity; documented units, sources and dependencies; no repeated sensor reads for the same composite source. |
+| 3 | Implement composite calculation, initial MAP default load, correction placement and validated authority. | Astra high | Endpoint/intermediate mass tests, unchanged model physics, one publisher and one correction pass. |
 | 4 | Complete fault gating/recovery, mode activation, diagnostics, TS editors and VE Analyze policy. | Astra high for runtime gating; Sol high for UI/tests | Fault latch prevents new injection despite cranking/AE/Lua requests; queued pulses drain correctly; correct live cursors and no stale mixed-mode state. |
 | 5 | Full host tests, ARM builds, resource/timing comparison, simulator and TunerStudio checks. | Sol high; independent Astra high review | Passing required checks, documented board sizes/timing and reproducible calibration workflow. |
 | 6 | Bench qualification, then separately arranged engine calibration. | Developer and operator | Recorded endpoint calibration and transition logs; hardware/engine results explicitly distinguished from automated tests. |
@@ -351,6 +445,15 @@ Have the reviewer check final diffs and test evidence, not only summaries.
   do not overwrite current VE, load, authority or injection-validity state.
 - Final normalized filling and existing AFR/ignition overrides; downstream
   load consumers never receive a weighted mixture of units.
+- All five load selections for lambda and ignition independently, including
+  accelerator pedal and measured MAP distinct from effective MAP. Staging uses
+  the lambda-table axis, while lambda monitoring and other default-load consumers
+  use `fuelingLoad`; test their routing separately. Preserve MAF's pre-correction
+  native load versus its post-correction normalized filling in standalone mode.
+- Shared input capture, measured/effective MAP provenance, required-input
+  dependencies for every supported load configuration, and unchanged legacy
+  override fallbacks. A missing inactive model input differs from a missing
+  input still required by a downstream table.
 - Required sensor loss, nonfinite result, invalid authority/axes, unused branch
   failure, startup before a valid sample, recovery and runtime configuration
   changes. Test actual scheduled injector behavior, not only returned mass:
@@ -362,6 +465,12 @@ Have the reviewer check final diffs and test evidence, not only summaries.
 - TunerStudio labels, live cursors, visibility, authority units, analysis
   enablement and correct destination through strategy changes, visible barometric
   corrections, and generated configuration/output size limits.
+
+Engine qualification follows the comparison matrix in
+[Air estimation and load architecture](airmass-architecture.md#qualification).
+Include idle bypass changes, a pressure dip at high TPS, warm-up/heat soak,
+barometric variation and model disagreement in the overlap. Host tests and
+synthetic log replay do not establish engine accuracy or transient performance.
 
 ## Validation commands and completion record
 

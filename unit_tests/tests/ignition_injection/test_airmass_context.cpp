@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "alphan_airmass.h"
+#include "airmass_loads.h"
 #include "fuel_math.h"
 #include "speed_density_airmass.h"
 
@@ -59,7 +60,6 @@ private:
 
 TEST(AirmassContext, CapturePreservesMapProvenanceAndResolvesEveryLoadSource) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
 	engineConfiguration->displacement = 2.4f;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 310;
@@ -67,6 +67,7 @@ TEST(AirmassContext, CapturePreservesMapProvenanceAndResolvesEveryLoadSource) {
 	engine->engineState.ignitionLoad = 62;
 	engineConfiguration->afrOverrideMode = AFR_MAP;
 	engineConfiguration->ignOverrideMode = AFR_Tps;
+	config->useMapEstimateTable = true;
 	engineConfiguration->useMapEstimateDuringTransient = true;
 	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
 	Sensor::setMockValue(SensorType::Map, 40);
@@ -80,6 +81,7 @@ TEST(AirmassContext, CapturePreservesMapProvenanceAndResolvesEveryLoadSource) {
 
 	AirmassInputs inputs;
 	sd.captureInputs(3000, inputs);
+	inputs.Composite = true;
 
 	ASSERT_TRUE(inputs.MeasuredMap.Valid);
 	EXPECT_FLOAT_EQ(inputs.MeasuredMap.Value, 40);
@@ -139,14 +141,14 @@ TEST(AirmassContext, CapturePreservesMapProvenanceAndResolvesEveryLoadSource) {
 	Sensor::setInvalidMockValue(SensorType::Tps1);
 	AirmassInputs invalidEstimate;
 	sd.captureInputs(3000, invalidEstimate);
-	EXPECT_TRUE(invalidEstimate.EffectiveMap.UsesEstimate);
+	EXPECT_FALSE(invalidEstimate.EffectiveMap.UsesEstimate);
 	EXPECT_FALSE(invalidEstimate.EffectiveMap.Valid);
-	EXPECT_FALSE(resolveAirmassLoad(invalidEstimate, 0, AFR_None).Valid);
+	EXPECT_FALSE(resolveAirmassLoad(invalidEstimate, 0, AFR_EffectiveMAP).Valid);
 }
 
 TEST(AirmassContext, StrictCaptureValidatesAnEstimateBeforeInterpolation) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	config->useMapEstimateTable = true;
 	Sensor::setMockValue(SensorType::Map, 55);
 	Sensor::setMockValue(SensorType::Tps1, 20);
 
@@ -193,9 +195,8 @@ TEST(AirmassContext, StrictCaptureValidatesAnEstimateBeforeInterpolation) {
 
 TEST(AirmassContext, RawModelsAndCorrectionsUseOneSnapshotAndMatchStandaloneResults) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
 	engineConfiguration->displacement = 3.2f;
-	engineConfiguration->alphaNUseIat = true;
+	config->airmassTemperatureSource = AirmassTemperatureSource::Tcharge;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 310;
 	setTable(config->veTable, 60);
@@ -209,7 +210,6 @@ TEST(AirmassContext, RawModelsAndCorrectionsUseOneSnapshotAndMatchStandaloneResu
 	Sensor::setMockValue(SensorType::Iat, 27);
 
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2400, 22)).WillOnce(Return(70));
 	SpeedDensityAirmass sd(nullptr, mapEstimate);
 	AlphaNAirmass alphaN;
 
@@ -241,7 +241,7 @@ TEST(AirmassContext, RawModelsAndCorrectionsUseOneSnapshotAndMatchStandaloneResu
 	EXPECT_FLOAT_EQ(alphaNDiagnostics.TableValue, 50);
 	EXPECT_NEAR(rawSd.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 60, 45, 310), EPS4D);
 	EXPECT_FLOAT_EQ(rawSd.Result.EngineLoadPercent, 45);
-	EXPECT_NEAR(rawAlphaN.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 50, 101.325f, 300), EPS4D);
+	EXPECT_NEAR(rawAlphaN.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 50, 101.325f, 310), EPS4D);
 	EXPECT_FLOAT_EQ(rawAlphaN.Result.EngineLoadPercent, 22);
 
 	// Raw model values exclude common corrections. +20% and -25% compound to 0.9.
@@ -265,57 +265,34 @@ TEST(AirmassContext, RawModelsAndCorrectionsUseOneSnapshotAndMatchStandaloneResu
 	config->veBlends[0].loadBins[2] = originalBin;
 }
 
-TEST(AirmassContext, MissingIatIsStrictForRawAlphaNButPreservesStandaloneFallback) {
+TEST(AirmassContext, SelectedTemperatureValidityIsSharedByBothModels) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
-	engineConfiguration->displacement = 4.0f;
-	engineConfiguration->alphaNUseIat = false;
-	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 310;
-	setTable(config->veTable, 60);
-	setTable(config->alphaNTable, 40);
 	Sensor::setMockValue(SensorType::Map, 50);
 	Sensor::setMockValue(SensorType::Tps1, 18);
 	Sensor::setInvalidMockValue(SensorType::Iat);
-
 	StrictMock<MockVp3d> mapEstimate;
 	SpeedDensityAirmass sd(nullptr, mapEstimate);
 	AlphaNAirmass alphaN;
-
 	AirmassInputs inputs;
+	config->airmassTemperatureSource = AirmassTemperatureSource::Tcharge;
 	sd.captureInputs(2000, inputs);
-	ASSERT_FALSE(inputs.Iat.Valid);
-	ASSERT_FALSE(inputs.AlphaNUseIat);
-
-	const auto rawSd = sd.evaluateRawAirmass(inputs);
-	const auto fixedTemperatureAlphaN = alphaN.evaluateRawAirmass(inputs);
-	EXPECT_TRUE(rawSd.Valid);
-	EXPECT_TRUE(fixedTemperatureAlphaN.Valid);
-	EXPECT_NEAR(fixedTemperatureAlphaN.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 40, 101.325f, 293), EPS4D);
-
-	auto requestedIat = inputs;
-	requestedIat.AlphaNUseIat = true;
-	RawAirmassDiagnostics diagnostics;
-	const auto strictAlphaN = alphaN.evaluateRawAirmass(requestedIat, &diagnostics);
-	EXPECT_FALSE(strictAlphaN.Valid);
-	EXPECT_FLOAT_EQ(strictAlphaN.Result.CylinderAirmass, 0);
-	EXPECT_FALSE(diagnostics.HasValue);
-	EXPECT_FALSE(diagnostics.Valid);
-	EXPECT_TRUE(sd.evaluateRawAirmass(requestedIat).Valid);
-
-	// The legacy standalone path intentionally retains its historical 20 C fallback.
-	engineConfiguration->alphaNUseIat = true;
-	const auto standalone = alphaN.evaluateAirmass(2000);
-	EXPECT_TRUE(standalone.Valid);
-	EXPECT_NEAR(standalone.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 40, 101.325f, 293), EPS4D);
-
-	configureFlatVeBlend(config->veBlends[0], GPPWM_Iat, GPPWM_Zero, 10);
-	VeCorrectionDiagnostics correctionDiagnostics;
-	const auto correction = evaluateAirmassCorrections(requestedIat, &correctionDiagnostics);
-	EXPECT_FALSE(correction.Valid);
-	EXPECT_FLOAT_EQ(correction.Multiplier, 1);
-	EXPECT_TRUE(correctionDiagnostics.HasValue);
-	EXPECT_FALSE(correctionDiagnostics.Valid);
+	EXPECT_TRUE(inputs.TemperatureValid);
+	EXPECT_TRUE(sd.evaluateRawAirmass(inputs).Valid);
+	EXPECT_TRUE(alphaN.evaluateRawAirmass(inputs).Valid);
+	config->airmassTemperatureSource = AirmassTemperatureSource::Iat;
+	sd.captureInputs(2000, inputs);
+	EXPECT_FALSE(inputs.TemperatureValid);
+	EXPECT_FALSE(sd.evaluateRawAirmass(inputs).Valid);
+	EXPECT_FALSE(alphaN.evaluateRawAirmass(inputs).Valid);
+	EXPECT_FALSE(alphaN.evaluateAirmass(2000).Valid);
+	Sensor::setMockValue(SensorType::Iat, 27);
+	sd.captureInputs(2000, inputs);
+	EXPECT_FLOAT_EQ(inputs.TemperatureK, 300.15f);
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	// Both raw branches use the same retained capture after the sensor changes.
+	EXPECT_TRUE(sd.evaluateRawAirmass(inputs).Valid);
+	EXPECT_TRUE(alphaN.evaluateRawAirmass(inputs).Valid);
 }
 
 TEST(AirmassContext, RepeatedNonCoreCorrectionChannelIsSampledOnce) {
@@ -335,4 +312,296 @@ TEST(AirmassContext, RepeatedNonCoreCorrectionChannelIsSampledOnce) {
 	EXPECT_EQ(auxTemperature.ReadCount, 1u);
 
 	auxTemperature.unregister();
+}
+
+TEST(AirmassRevision, MapEstimatePermissionControlsFallbackAndTransientComparison) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	StrictMock<MockVp3d> estimate;
+	SpeedDensityAirmass sd(nullptr, estimate);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setInvalidMockValue(SensorType::Map);
+	engineConfiguration->useMapEstimateDuringTransient = true;
+	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
+	config->useMapEstimateTable = false;
+	auto disabled = sd.evaluateMap(2200);
+	EXPECT_FALSE(disabled.Valid);
+	EXPECT_FALSE(disabled.HasValue);
+	Sensor::setMockValue(SensorType::Map, 40);
+	EXPECT_FLOAT_EQ(sd.evaluateMap(2200).Map, 40);
+	config->useMapEstimateTable = true;
+	EXPECT_CALL(estimate, getValue(2200, 20)).Times(2).WillRepeatedly(Return(75));
+	EXPECT_FLOAT_EQ(sd.evaluateMap(2200).Map, 75);
+	engineConfiguration->useMapEstimateDuringTransient = false;
+	EXPECT_FLOAT_EQ(sd.evaluateMap(2200).Map, 40);
+	Sensor::setInvalidMockValue(SensorType::Map);
+	EXPECT_FLOAT_EQ(sd.evaluateMap(2200).Map, 75);
+}
+
+TEST(AirmassRevision, HybridPressurePolicyIsExplicitAndSuppressesAutomaticBaro) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
+	engine->engineState.sd.tChargeK = 320;
+	setTable(config->alphaNTable, 65);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setMockValue(SensorType::Map, 55);
+	Sensor::setMockValue(SensorType::Iat, 10);
+	Sensor::setMockValue(SensorType::BarometricPressure, 80);
+	config->alphaNBaroReferencePressure = 100;
+	AlphaNAirmass alphaN;
+	for (auto source : {AirmassTemperatureSource::Tcharge, AirmassTemperatureSource::Iat}) {
+		config->airmassTemperatureSource = source;
+		config->alphaNBaroCompensation = false;
+		config->alphaNMultiplyMap = false;
+		const auto pure = alphaN.evaluateAirmass(2200);
+		ASSERT_TRUE(pure.Valid);
+		config->alphaNMultiplyMap = true;
+		config->alphaNBaroCompensation = true;
+		AirmassDiagnostics diagnostics;
+		const auto hybrid = alphaN.evaluateAirmass(2200, &diagnostics);
+		ASSERT_TRUE(hybrid.Valid);
+		EXPECT_NEAR(hybrid.Result.CylinderAirmass, pure.Result.CylinderAirmass * 55 / 101.325f, EPS4D);
+		EXPECT_FLOAT_EQ(diagnostics.BaroCoefficient, 1);
+		EXPECT_TRUE(diagnostics.PressureFlags & 8);
+		AirmassInputs inputs;
+		captureAirmassInputs(2200, inputs);
+		RawAirmassDiagnostics raw;
+		const auto explicitPure = alphaN.evaluateRawAirmass(inputs, &raw, AlphaNPressurePolicy::PureReference);
+		EXPECT_NEAR(explicitPure.Result.CylinderAirmass, pure.Result.CylinderAirmass * 0.8f, EPS4D);
+		EXPECT_FLOAT_EQ(raw.BaroCoefficient, 0.8f);
+	}
+	Sensor::setInvalidMockValue(SensorType::Map);
+	EXPECT_FALSE(alphaN.evaluateAirmass(2200).Valid);
+	config->alphaNMultiplyMap = false;
+	EXPECT_TRUE(alphaN.evaluateAirmass(2200).Valid);
+	Sensor::setInvalidMockValue(SensorType::BarometricPressure);
+	EXPECT_FALSE(alphaN.evaluateAirmass(2200).Valid);
+	config->alphaNBaroCompensation = false;
+	EXPECT_TRUE(alphaN.evaluateAirmass(2200).Valid);
+}
+
+TEST(AirmassRevision, BaroReferenceAndCapturedPressureAreValidated) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 300;
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setMockValue(SensorType::BarometricPressure, 90);
+	config->alphaNBaroCompensation = true;
+	config->alphaNBaroReferencePressure = 90;
+	AlphaNAirmass alphaN;
+	AirmassInputs inputs;
+	captureAirmassInputs(2000, inputs);
+	RawAirmassDiagnostics diagnostics;
+	auto reference = alphaN.evaluateRawAirmass(inputs, &diagnostics);
+	ASSERT_TRUE(reference.Valid);
+	EXPECT_FLOAT_EQ(diagnostics.BaroCoefficient, 1);
+	Sensor::setMockValue(SensorType::BarometricPressure, 75);
+	EXPECT_FLOAT_EQ(alphaN.evaluateRawAirmass(inputs).Result.CylinderAirmass, reference.Result.CylinderAirmass);
+	captureAirmassInputs(2000, inputs);
+	EXPECT_NEAR(
+			alphaN.evaluateRawAirmass(inputs).Result.CylinderAirmass,
+			reference.Result.CylinderAirmass * 75 / 90,
+			EPS4D);
+	for (float invalid : {0.0f, -1.0f, NAN, INFINITY}) {
+		config->alphaNBaroReferencePressure = invalid;
+		EXPECT_FALSE(alphaN.evaluateRawAirmass(inputs).Valid);
+	}
+	config->alphaNBaroReferencePressure = 90;
+	inputs.BarometricPressure = unexpected;
+	EXPECT_FALSE(alphaN.evaluateRawAirmass(inputs).Valid);
+	config->alphaNBaroCompensation = false;
+	EXPECT_TRUE(alphaN.evaluateRawAirmass(inputs).Valid);
+}
+
+TEST(AirmassRevision, IdleVeBelongsToOneBranchAndUsesItsOwnAxis) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->useSeparateVeForIdle = true;
+	engineConfiguration->idlePidDeactivationTpsThreshold = 10;
+	engine->engineState.sd.tChargeK = 300;
+	setTable(config->veTable, 80);
+	setTable(config->alphaNTable, 80);
+	setTable(config->idleVeTable, 40);
+	setLinearCurve(config->idleVeLoadBins, 0, 100, 1);
+	setLinearCurve(config->idleVeRpmBins, 0, 2500, 1);
+	Sensor::setMockValue(SensorType::Map, 55);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	StrictMock<MockVp3d> estimate;
+	SpeedDensityAirmass sd(nullptr, estimate);
+	AlphaNAirmass alphaN;
+	AirmassInputs inputs;
+	captureAirmassInputs(2000, inputs);
+	inputs.Composite = true;
+	inputs.IdleActive = true;
+	for (auto target : {IdleVeModel::SpeedDensity, IdleVeModel::AlphaN}) {
+		config->idleVeModel = target;
+		for (auto axis : {IdleVeLoadSource::EffectiveMap, IdleVeLoadSource::Tps, IdleVeLoadSource::MeasuredMap}) {
+			config->idleVeLoadSource = axis;
+			for (float intent : {0.0f, 5.0f, 7.5f, 10.0f}) {
+				inputs.DriverThrottleIntent = intent;
+				RawAirmassDiagnostics sdDiagnostics, anDiagnostics;
+				ASSERT_TRUE(sd.evaluateRawAirmass(inputs, &sdDiagnostics).Valid);
+				ASSERT_TRUE(alphaN.evaluateRawAirmass(inputs, &anDiagnostics).Valid);
+				const auto& owned = target == IdleVeModel::SpeedDensity ? sdDiagnostics : anDiagnostics;
+				const auto& other = target == IdleVeModel::SpeedDensity ? anDiagnostics : sdDiagnostics;
+				EXPECT_FLOAT_EQ(other.TableValue, 80);
+				EXPECT_FLOAT_EQ(other.IdleWeight, 0);
+				EXPECT_FLOAT_EQ(owned.TableValue, intent <= 5 ? 40 : intent == 7.5f ? 60 : 80);
+				if (intent < 10) {
+					EXPECT_FLOAT_EQ(owned.IdleLoad, axis == IdleVeLoadSource::Tps ? 20 : 55);
+				}
+			}
+		}
+	}
+	config->idleVeModel = IdleVeModel::AlphaN;
+	config->idleVeLoadSource = IdleVeLoadSource::MeasuredMap;
+	inputs.DriverThrottleIntent = 0;
+	inputs.MeasuredMap = unexpected;
+	EXPECT_TRUE(sd.evaluateRawAirmass(inputs).Valid);
+	EXPECT_FALSE(alphaN.evaluateRawAirmass(inputs).Valid);
+	inputs.DriverThrottleIntent = 10;
+	EXPECT_TRUE(alphaN.evaluateRawAirmass(inputs).Valid);
+	inputs.DriverThrottleIntent = 0;
+	inputs.IdleActive = false;
+	EXPECT_TRUE(alphaN.evaluateRawAirmass(inputs).Valid);
+}
+
+namespace {
+void configureMapIndependentAirmass(engine_load_mode_e mode) {
+	engineConfiguration->fuelAlgorithm = mode;
+	engineConfiguration->isInjectionEnabled = true;
+	engineConfiguration->isIgnitionEnabled = true;
+	engineConfiguration->useSeparateVeForIdle = false;
+	engineConfiguration->useSeparateAdvanceForIdle = false;
+	engineConfiguration->enableTrailingSparks = false;
+	engineConfiguration->fuelClosedLoopCorrectionEnabled = false;
+	engineConfiguration->lambdaProtectionEnable = false;
+	engineConfiguration->afrOverrideMode = AFR_Tps;
+	engineConfiguration->ignOverrideMode = AFR_Tps;
+	config->airmassTemperatureSource = AirmassTemperatureSource::Iat;
+	config->alphaNMultiplyMap = false;
+	config->alphaNBaroCompensation = false;
+	config->useMapEstimateTable = false;
+	config->injectionPhaseLoadSource = AFR_Tps;
+	config->ignitionIatLoadSource = AFR_Tps;
+	for (auto& source : config->fuelTrimLoadSource) {
+		source = AFR_Tps;
+	}
+	for (auto& source : config->ignitionTrimLoadSource) {
+		source = AFR_Tps;
+	}
+	setTable(config->alphaNTable, 60);
+	setTable(config->airmassBlendTable, 100);
+	setTable(config->lambdaTable, 1);
+	setTable(config->ignitionTable, 45);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setMockValue(SensorType::Iat, 20);
+	Sensor::setMockValue(SensorType::Clt, 80);
+	Sensor::setInvalidMockValue(SensorType::Map);
+	Sensor::setMockValue(SensorType::Rpm, 2000);
+}
+} // namespace
+
+TEST(AirmassRevision, DisabledIgnitionDoesNotRequireItsStoredMapOrRunTimingTables) {
+	for (auto mode : {LM_ALPHA_N, LM_SD_ALPHA_N}) {
+		EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+		configureMapIndependentAirmass(mode);
+		engineConfiguration->isIgnitionEnabled = false;
+		engineConfiguration->ignOverrideMode = AFR_MAP;
+		engineConfiguration->enableTrailingSparks = true;
+		config->trailingSparkLoadSource = AFR_MAP;
+		engine->ignitionState.luaTimingMult = NAN;
+		engine->ignitionState.timingIatCorrection = 10;
+		engine->ignitionState.sparkDwell = 3;
+		engine->torqueReductionController.setReductionRequest(0.5f);
+		engine->engineState.periodicFastCallback();
+		ASSERT_TRUE(engine->engineState.airmassCalculationValid);
+		EXPECT_GT(engine->cylinders[0].getInjectionMass(), 0);
+		EXPECT_FLOAT_EQ(engine->engineState.ignitionLoad, 0);
+		EXPECT_FLOAT_EQ(engine->outputChannels.ignitionAdvance, 0);
+		EXPECT_FLOAT_EQ(engine->engineState.trailingSparkAngle, 0);
+		EXPECT_FLOAT_EQ(engine->ignitionState.timingIatCorrection, 0);
+		EXPECT_FLOAT_EQ(engine->ignitionState.sparkDwell, 0);
+		EXPECT_FLOAT_EQ(engine->torqueReductionController.reductionRequest, 50);
+		// Re-enabling this consumer restores its genuine MAP dependency.
+		engineConfiguration->isIgnitionEnabled = true;
+		engine->ignitionState.luaTimingMult = 1;
+		engine->engineState.periodicFastCallback();
+		EXPECT_FALSE(engine->engineState.airmassCalculationValid);
+		EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+	}
+}
+
+TEST(AirmassRevision, UnusedLambdaTargetDoesNotBlockAirCalculationOrPublishFuel) {
+	for (auto mode : {LM_ALPHA_N, LM_SD_ALPHA_N}) {
+		EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+		configureMapIndependentAirmass(mode);
+		engineConfiguration->isInjectionEnabled = false;
+		engineConfiguration->afrOverrideMode = AFR_MAP;
+		engineConfiguration->enableStagedInjection = true;
+		config->stagingLoadSource = AFR_MAP;
+		config->injectionPhaseLoadSource = AFR_MAP;
+		setTable(config->lambdaTable, 0);
+		engine->fuelComputer.afrTableYAxis = 99;
+		engine->fuelComputer.targetLambda = 1.2f;
+		engine->fuelComputer.targetAFR = 17;
+		engine->fuelComputer.stoichiometricRatio = 14.7f;
+		engineConfiguration->cranking.baseFuel = 4000;
+		engine->engineState.lua.fuelAdd = 3;
+		engine->engineState.periodicFastCallback();
+		ASSERT_TRUE(engine->engineState.airmassCalculationValid);
+		ASSERT_FALSE(isAirmassLambdaTargetRequired());
+		EXPECT_GT(engine->fuelComputer.sdAirMassInOneCylinder, 0);
+		EXPECT_FLOAT_EQ(engine->fuelComputer.afrTableYAxis, 0);
+		EXPECT_FLOAT_EQ(engine->fuelComputer.targetLambda, 0);
+		EXPECT_FLOAT_EQ(engine->fuelComputer.targetAFR, 0);
+		EXPECT_FLOAT_EQ(engine->fuelComputer.stoichiometricRatio, 0);
+		EXPECT_FLOAT_EQ(engine->engineState.injectionDuration, 0);
+		EXPECT_FLOAT_EQ(engine->engineState.injectionDurationStage2, 0);
+		EXPECT_FLOAT_EQ(engine->engineState.baseFuel, 0);
+		EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+		engineConfiguration->isInjectionEnabled = true;
+		engine->engineState.periodicFastCallback();
+		EXPECT_FALSE(engine->engineState.airmassCalculationValid);
+	}
+}
+
+TEST(AirmassRevision, StandaloneFuelConversionRejectsInvalidTargetBeforePackedPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	configureMapIndependentAirmass(LM_ALPHA_N);
+	engine->engineState.periodicFastCallback();
+	ASSERT_TRUE(engine->airmassInjectionState.allowInjection());
+	const auto token = engine->airmassInjectionState.beginCalculation(
+			LM_ALPHA_N, 2000, engine->getGlobalConfigurationVersion());
+	// The packed calibration can represent zero lambda, which is an invalid
+	// fuel conversion target. NaN cannot be stored in its integer encoding.
+	setTable(config->lambdaTable, 0);
+	EXPECT_FLOAT_EQ(getCycleInjectionMass(2000, false), 0);
+	// Known invalid target closes admission before the fast callback finishes.
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	engine->airmassInjectionState.completeCalculation(token, true);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	EXPECT_FALSE(engine->engineState.airmassCalculationValid);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.afrTableYAxis, 0);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.targetLambda, 0);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.targetAFR, 0);
+	EXPECT_FLOAT_EQ(engine->fuelComputer.stoichiometricRatio, 0);
+	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+}
+
+TEST(AirmassRevision, StandaloneInputFailureClosesAdmissionBeforeFinalPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	configureMapIndependentAirmass(LM_ALPHA_N);
+	engine->engineState.periodicFastCallback();
+	ASSERT_TRUE(engine->airmassInjectionState.allowInjection());
+	const auto token = engine->airmassInjectionState.beginCalculation(
+			LM_ALPHA_N, 2000, engine->getGlobalConfigurationVersion());
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	EXPECT_FLOAT_EQ(getCycleInjectionMass(2000, false), 0);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+	EXPECT_FLOAT_EQ(engine->engineState.injectionDuration, 0);
+	engine->airmassInjectionState.completeCalculation(token, true);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+
+	Sensor::setMockValue(SensorType::Iat, 20);
+	engine->engineState.periodicFastCallback();
+	EXPECT_TRUE(engine->airmassInjectionState.allowInjection());
 }

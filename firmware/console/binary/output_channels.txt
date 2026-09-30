@@ -349,4 +349,23 @@ struct_no_prefix output_channels_s
 	uint8_t blendedFault;Air blend: Latched fault;"code", 1, 0, 0, 0, 0
 	uint16_t blendedFlags;Air blend: Calculation flags;"bits", 1, 0, 0, 0, 0
 	float blendedLambdaLoad;Air blend: Lambda load;"", 1, 0, 0, 0, 2
+	float airmassTemperature;Airmass: Temperature used;"C", 1, 0, 0, 0, 2
+	uint8_t airmassTemperatureSourceUsed;Airmass: Temperature source;"code", 1, 0, 0, 0, 0
+	float alphaNBaroCoefficient;Alpha-N: BARO coefficient;"", 1, 0, 0, 0, 3
+	uint8_t airmassPressureFlags;Airmass: Pressure provenance;"bits", 1, 0, 0, 0, 0
+	uint8_t blendedVeAnalyzeEndpoint;Air blend: Qualified analyze endpoint;"code", 1, 0, 0, 0, 0
+	int16_t autoscale injectionPhaseLoad;Load: injectionPhase;"", 0.1, 0, -3276, 3276, 1
+	int16_t[12 iterate] autoscale fuelTrimLoad;Load: fuelTrim;"", 0.1, 0, -3276, 3276, 1
+	int16_t[12 iterate] autoscale ignitionTrimLoad;Load: ignitionTrim;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale stftLoad;Load: stft;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale stagingLoad;Load: staging;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale lambdaDeviationLoad;Load: lambdaDeviation;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale lambdaMonitorLoad;Load: lambdaMonitor;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale trailingSparkLoad;Load: trailingSpark;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale ignitionIatLoad;Load: ignitionIat;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale knockRetardLoad;Load: knockRetard;"", 0.1, 0, -3276, 3276, 1
+	int16_t[12 iterate] autoscale knockGainLoad;Load: knockGain;"", 0.1, 0, -3276, 3276, 1
+	int16_t autoscale hpfpTargetLoad;Load: hpfpTarget;"", 0.1, 0, -3276, 3276, 1
+	int16_t[BOOST_BLEND_COUNT iterate] boostOpenLoopBlendXAxisValue;Boost correction X;"", 1, 0, -32768, 32767, 0
+	int16_t[BOOST_BLEND_COUNT iterate] boostClosedLoopBlendXAxisValue;Boost correction X;"", 1, 0, -32768, 32767, 0
 end_struct

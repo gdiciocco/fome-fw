@@ -57,11 +57,11 @@ void configureMafAxesForInterpolation() {
 }
 } // namespace
 
-TEST(DedicatedAirmassTables, DefaultsKeepLegacyPresetBehavior) {
+TEST(DedicatedAirmassTables, DefaultsProvideThreeIndependentCalibrations) {
 	EngineTestHelper eth(engine_type_e::FRANKENSO_BMW_M73_F);
+	engine->engineState.sd.tChargeK = 293.15f;
 	Sensor::setMockValue(SensorType::Tps1, 25);
 
-	EXPECT_FALSE(engineConfiguration->useDedicatedAirmassTables);
 	EXPECT_EQ(ALPHA_N_LOAD_COUNT, 16);
 	EXPECT_EQ(ALPHA_N_RPM_COUNT, 16);
 	EXPECT_EQ(MAF_LOAD_COUNT, 16);
@@ -85,18 +85,18 @@ TEST(DedicatedAirmassTables, DefaultsKeepLegacyPresetBehavior) {
 	auto evaluation = alphaN.evaluateAirmass(1800, &diagnostics);
 
 	EXPECT_TRUE(evaluation.Valid);
-	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 45);
+	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 80);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 25);
 	EXPECT_NEAR(
 			evaluation.Result.CylinderAirmass,
 			expectedIdealGasMass(
-					engineConfiguration->displacement, engine->engineState.cylinderCount, 45, 101.325f, 293),
+					engineConfiguration->displacement, engine->engineState.cylinderCount, 80, 101.325f, 293.15f),
 			EPS4D);
 }
 
 TEST(DedicatedAirmassTables, AlphaNUsesFractionalTpsAndIndependentRpmAxes) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->fuelAlgorithm = LM_REAL_MAF;
 	engineConfiguration->displacement = 3.2f;
 	setCylinderCount(4);
@@ -110,7 +110,7 @@ TEST(DedicatedAirmassTables, AlphaNUsesFractionalTpsAndIndependentRpmAxes) {
 	EXPECT_FLOAT_EQ(midpoint.Result.EngineLoadPercent, 1.25f);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 70);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 1.25f);
-	EXPECT_NEAR(midpoint.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 70, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(midpoint.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 70, 101.325f, 293.15f), EPS4D);
 
 	Sensor::setMockValue(SensorType::Tps1, 1.1f);
 	auto asymmetric = alphaN.evaluateAirmass(1875, &diagnostics);
@@ -118,24 +118,24 @@ TEST(DedicatedAirmassTables, AlphaNUsesFractionalTpsAndIndependentRpmAxes) {
 	EXPECT_NEAR(asymmetric.Result.EngineLoadPercent, 1.1f, EPS4D);
 	EXPECT_NEAR(diagnostics.Ve.Ve, 74, EPS4D);
 	EXPECT_NEAR(diagnostics.Ve.Load, 1.1f, EPS4D);
-	EXPECT_NEAR(asymmetric.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 74, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(asymmetric.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 74, 101.325f, 293.15f), EPS4D);
 
 	Sensor::setMockValue(SensorType::Tps1, 0);
 	auto belowAxes = alphaN.evaluateAirmass(100, &diagnostics);
 	EXPECT_TRUE(belowAxes.Valid);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 33);
-	EXPECT_NEAR(belowAxes.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 33, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(belowAxes.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 33, 101.325f, 293.15f), EPS4D);
 
 	Sensor::setMockValue(SensorType::Tps1, 100);
 	auto aboveAxes = alphaN.evaluateAirmass(9000, &diagnostics);
 	EXPECT_TRUE(aboveAxes.Valid);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 99);
-	EXPECT_NEAR(aboveAxes.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 99, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(aboveAxes.Result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 99, 101.325f, 293.15f), EPS4D);
 }
 
 TEST(DedicatedAirmassTables, MafUsesNativeFillingAndIndependentRpmAxes) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
 	engineConfiguration->displacement = 2.0f;
 	setCylinderCount(4);
@@ -157,60 +157,28 @@ TEST(DedicatedAirmassTables, MafUsesNativeFillingAndIndependentRpmAxes) {
 	EXPECT_NEAR(evaluation.Result.CylinderAirmass, rawCylinderMass * 0.70f, EPS4D);
 }
 
-TEST(DedicatedAirmassTables, DisabledModePreservesLegacyLoadOverride) {
+TEST(DedicatedAirmassTables, MainMapOwnershipAndAxesDoNotFollowGlobalMode) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = false;
-	engineConfiguration->veOverrideMode = VE_MAP;
-	engineConfiguration->displacement = 2.4f;
-	setCylinderCount(4);
+	engine->engineState.sd.tChargeK = 300;
 	setTable(config->veTable, 60);
 	setTable(config->alphaNTable, 25);
 	Sensor::setMockValue(SensorType::Tps1, 12);
 	Sensor::setMockValue(SensorType::Map, 75);
-
 	AlphaNAirmass alphaN;
-	AirmassDiagnostics diagnostics;
-	auto evaluation = alphaN.evaluateAirmass(2200, &diagnostics);
-
-	EXPECT_TRUE(evaluation.Valid);
-	EXPECT_FLOAT_EQ(evaluation.Result.EngineLoadPercent, 12);
-	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 75);
-	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 60);
-	EXPECT_NEAR(evaluation.Result.CylinderAirmass, expectedIdealGasMass(2.4f, 4, 60, 101.325f, 293), EPS4D);
-	EXPECT_TRUE(isAirmassConfigurationValid());
-
-	engineConfiguration->useDedicatedAirmassTables = true;
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	seedPublishedVeDiagnostics();
-	const int warningCount = eth.getWarningCounter();
-
-	AirmassEvaluation invalidEvaluation;
-	EXPECT_NO_FATAL_ERROR(invalidEvaluation = alphaN.evaluateAirmass(2200, &diagnostics));
-	EXPECT_FALSE(invalidEvaluation.Valid);
-	EXPECT_FLOAT_EQ(invalidEvaluation.Result.CylinderAirmass, 0);
-	EXPECT_FLOAT_EQ(invalidEvaluation.Result.EngineLoadPercent, 12);
-	EXPECT_FALSE(diagnostics.Ve.HasValue);
-	EXPECT_FALSE(diagnostics.Ve.Valid);
-
-	AirmassResult dryResult;
-	EXPECT_NO_FATAL_ERROR(dryResult = alphaN.getAirmass(2200, false));
-	EXPECT_FLOAT_EQ(dryResult.CylinderAirmass, 0);
-	EXPECT_FLOAT_EQ(dryResult.EngineLoadPercent, 12);
-	EXPECT_EQ(eth.getWarningCounter(), warningCount);
-	EXPECT_FALSE(hasFirmwareError());
-	expectPublishedVeDiagnosticsUnchanged();
+	for (auto mode : {LM_SPEED_DENSITY, LM_ALPHA_N, LM_REAL_MAF, LM_SD_ALPHA_N}) {
+		engineConfiguration->fuelAlgorithm = mode;
+		AirmassDiagnostics diagnostics;
+		const auto evaluation = alphaN.evaluateAirmass(2200, &diagnostics);
+		EXPECT_TRUE(evaluation.Valid);
+		EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 12);
+		EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 25);
+	}
 }
 
-TEST(DedicatedAirmassTables, ConfigurationChangeRejectsInvalidDedicatedConfiguration) {
+TEST(DedicatedAirmassTables, ConfigurationChangeRejectsInvalidActiveConfiguration) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
-	engineConfiguration->veOverrideMode = VE_TPS;
+	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
 	const auto version = engine->globalConfigurationVersion;
-
-	EXPECT_FATAL_ERROR(incrementGlobalConfigurationVersion());
-	EXPECT_EQ(engine->globalConfigurationVersion, version);
-
-	engineConfiguration->veOverrideMode = VE_None;
 	config->alphaNRpmBins[ALPHA_N_RPM_COUNT - 1] = 18001;
 	EXPECT_FATAL_ERROR(incrementGlobalConfigurationVersion());
 	EXPECT_EQ(engine->globalConfigurationVersion, version);
@@ -218,57 +186,24 @@ TEST(DedicatedAirmassTables, ConfigurationChangeRejectsInvalidDedicatedConfigura
 
 TEST(DedicatedAirmassTables, DedicatedAxesMustBeStrictlyAscending) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
-	ASSERT_TRUE(isAirmassConfigurationValid());
-
-	const float alphaTps = config->alphaNTpsBins[2];
+	ASSERT_TRUE(isAirmassModelConfigurationValid(LM_ALPHA_N));
+	ASSERT_TRUE(isAirmassModelConfigurationValid(LM_REAL_MAF));
 	config->alphaNTpsBins[2] = config->alphaNTpsBins[1];
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->alphaNTpsBins[2] = alphaTps;
-
-	const float alphaRpm = config->alphaNRpmBins[3];
-	config->alphaNRpmBins[3] = config->alphaNRpmBins[1];
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->alphaNRpmBins[3] = alphaRpm;
-
-	const float mafLoad = config->mafLoadBins[2];
-	config->mafLoadBins[2] = config->mafLoadBins[1];
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->mafLoadBins[2] = mafLoad;
-
-	const float mafRpm = config->mafRpmBins[3];
-	config->mafRpmBins[3] = config->mafRpmBins[1];
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->mafRpmBins[3] = mafRpm;
-
-	const float alphaTpsLast = config->alphaNTpsBins[ALPHA_N_LOAD_COUNT - 1];
-	config->alphaNTpsBins[ALPHA_N_LOAD_COUNT - 1] = 100.01f;
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->alphaNTpsBins[ALPHA_N_LOAD_COUNT - 1] = alphaTpsLast;
-
-	const float alphaRpmLast = config->alphaNRpmBins[ALPHA_N_RPM_COUNT - 1];
+	EXPECT_FALSE(isAirmassModelConfigurationValid(LM_ALPHA_N));
+	EXPECT_TRUE(isAirmassModelConfigurationValid(LM_REAL_MAF));
+	setLinearCurve(config->alphaNTpsBins, 0, 100, 1);
 	config->alphaNRpmBins[ALPHA_N_RPM_COUNT - 1] = 18001;
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->alphaNRpmBins[ALPHA_N_RPM_COUNT - 1] = alphaRpmLast;
-
-	const float mafLoadLast = config->mafLoadBins[MAF_LOAD_COUNT - 1];
-	config->mafLoadBins[MAF_LOAD_COUNT - 1] = 1001;
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	engineConfiguration->useDedicatedAirmassTables = false;
-	EXPECT_TRUE(isAirmassConfigurationValid());
-	engineConfiguration->useDedicatedAirmassTables = true;
-	config->mafLoadBins[MAF_LOAD_COUNT - 1] = mafLoadLast;
-
-	const float mafRpmLast = config->mafRpmBins[MAF_RPM_COUNT - 1];
+	EXPECT_FALSE(isAirmassModelConfigurationValid(LM_ALPHA_N));
+	config->mafLoadBins[2] = config->mafLoadBins[1];
+	EXPECT_FALSE(isAirmassModelConfigurationValid(LM_REAL_MAF));
+	setLinearCurve(config->mafLoadBins, 0, 200, 1);
 	config->mafRpmBins[MAF_RPM_COUNT - 1] = 18001;
-	EXPECT_FALSE(isAirmassConfigurationValid());
-	config->mafRpmBins[MAF_RPM_COUNT - 1] = mafRpmLast;
-	EXPECT_TRUE(isAirmassConfigurationValid());
+	EXPECT_FALSE(isAirmassModelConfigurationValid(LM_REAL_MAF));
 }
 
 TEST(DedicatedAirmassTables, InvalidAxisDryReadDoesNotPublishOrRaiseFault) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
 	config->alphaNTpsBins[2] = config->alphaNTpsBins[1];
 	Sensor::setMockValue(SensorType::Tps1, 12);
@@ -289,28 +224,30 @@ TEST(DedicatedAirmassTables, InvalidAxisDryReadDoesNotPublishOrRaiseFault) {
 	expectPublishedVeDiagnosticsUnchanged();
 }
 
-TEST(DedicatedAirmassTables, LiveFuelOwnerRejectsInvalidUnselectedAxis) {
+TEST(DedicatedAirmassTables, UnusedModelAxesDoNotBlockTheActiveModel) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
 	config->mafLoadBins[MAF_LOAD_COUNT - 1] = 1001;
 
-	EXPECT_FATAL_ERROR(getCycleInjectionMass(2200, false));
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	AlphaNAirmass alphaN;
+	EXPECT_TRUE(alphaN.evaluateAirmass(2200).Valid);
 }
 
 TEST(DedicatedAirmassTables, DedicatedMainAxisRetainsIdleOverride) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->useDedicatedAirmassTables = true;
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->veOverrideMode = VE_None;
 	engineConfiguration->useSeparateVeForIdle = true;
-	engineConfiguration->idleVeOverrideMode = VE_MAP;
+	config->idleVeLoadSource = IdleVeLoadSource::MeasuredMap;
 	engineConfiguration->idlePidDeactivationTpsThreshold = 10;
 	engineConfiguration->displacement = 2.4f;
 	setCylinderCount(4);
 	setTable(config->alphaNTable, 80);
 	setTable(config->idleVeTable, 40);
 	setLinearCurve(config->idleVeLoadBins, 0, 100, 1);
-	setLinearCurve(config->idleVeRpmBins, 0, 7000, 1);
+	setLinearCurve(config->idleVeRpmBins, 0, 2500, 1);
 
 	DedicatedTableIdleController idle;
 	engine->engineModules.get<IdleController>().set(&idle);
@@ -328,5 +265,47 @@ TEST(DedicatedAirmassTables, DedicatedMainAxisRetainsIdleOverride) {
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 12.5f);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.IdleLoad, 77);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 60);
-	EXPECT_NEAR(evaluation.Result.CylinderAirmass, expectedIdealGasMass(2.4f, 4, 60, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(evaluation.Result.CylinderAirmass, expectedIdealGasMass(2.4f, 4, 60, 101.325f, 293.15f), EPS4D);
+}
+
+TEST(DedicatedAirmassTables, MafIdleRetainsItsCorrectionMeaningAndIgnoresIdealGasOptions) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->fuelAlgorithm = LM_REAL_MAF;
+	engineConfiguration->displacement = 2;
+	setCylinderCount(4);
+	engineConfiguration->useSeparateVeForIdle = true;
+	engineConfiguration->idlePidDeactivationTpsThreshold = 10;
+	config->idleVeModel = IdleVeModel::AlphaN;
+	config->alphaNMultiplyMap = true;
+	config->alphaNBaroCompensation = true;
+	config->airmassTemperatureSource = AirmassTemperatureSource::Iat;
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	Sensor::setInvalidMockValue(SensorType::BarometricPressure);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setMockValue(SensorType::Map, 55);
+	Sensor::setMockValue(SensorType::DriverThrottleIntent, 0);
+	setTable(config->mafTable, 100);
+	setTable(config->idleVeTable, 50);
+	setLinearCurve(config->idleVeLoadBins, 0, 100, 1);
+	setLinearCurve(config->idleVeRpmBins, 0, 2500, 1);
+	DedicatedTableIdleController idle;
+	engine->engineModules.get<IdleController>().set(&idle);
+	MafAirmass maf;
+	for (auto axis :
+		 {IdleVeLoadSource::ModelDefault,
+		  IdleVeLoadSource::Tps,
+		  IdleVeLoadSource::MeasuredMap,
+		  IdleVeLoadSource::EffectiveMap}) {
+		config->idleVeLoadSource = axis;
+		AirmassDiagnostics diagnostics;
+		const auto evaluation = maf.evaluateAirmassImpl(72, 2000, &diagnostics);
+		ASSERT_TRUE(evaluation.Valid);
+		EXPECT_NEAR(evaluation.Result.CylinderAirmass, 0.15f, EPS4D);
+		EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 50);
+		EXPECT_FLOAT_EQ(
+				diagnostics.Ve.IdleLoad,
+				axis == IdleVeLoadSource::ModelDefault ? evaluation.Result.EngineLoadPercent
+				: axis == IdleVeLoadSource::Tps		   ? 20
+													   : 55);
+	}
 }

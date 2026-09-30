@@ -27,6 +27,11 @@ struct BlendedAirmassEvaluation {
 // Optional capture. The live path publishes through a small delivery target and
 // does not reserve this complete diagnostics buffer on the main-loop stack.
 struct BlendedAirmassDiagnostics {
+	float TemperatureK = 0;
+	bool TemperatureValid = false;
+	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
+	float BaroCoefficient = 1;
+	uint8_t PressureFlags = 0;
 	float SdMass = 0;
 	float AlphaNMass = 0;
 	RawAirmassDiagnostics Sd;

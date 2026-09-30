@@ -8,6 +8,7 @@
 #include "fuel_math.h"
 #include "fuel_computer.h"
 #include "backup_ram.h"
+#include "airmass_loads.h"
 
 expected<float> getStoredFlexEthanolPercent() {
 	float stored = getBackupSram()->FlexEthanolPct;
@@ -127,6 +128,9 @@ float FuelComputer::getTargetLambdaLoadAxis(float defaultLoad) const {
 }
 
 float IFuelComputer::getLoadOverride(float defaultLoad, load_override_e overrideMode) const {
+	if (engine->engineState.airmassLoads.Valid || overrideMode == AFR_EffectiveMAP) {
+		return getAirmassSelectedLoad(overrideMode, defaultLoad);
+	}
 	switch (overrideMode) {
 		case AFR_None:
 			return defaultLoad;

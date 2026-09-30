@@ -8,12 +8,14 @@ using ::testing::StrictMock;
 
 TEST(HPFP, ConfigResetWaitsForArmedCloseBeforeRestarting) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE, [](engine_configuration_s* cfg) { cfg->hpfpValvePin = Gpio::A2; });
+	Sensor::setMockValue(SensorType::Map, 40);
 	engineConfiguration->hpfpCamLobes = 3;
 	engineConfiguration->hpfpPumpVolume = 0.2;
 	engineConfiguration->hpfpActivationAngle = 30;
 	engine->rpmCalculator.setRpmValue(1000);
 	auto& hpfp = *engine->module<HpfpController>();
 	auto& scheduler = *engine->module<TriggerScheduler>();
+	ASSERT_TRUE(hpfp.m_running);
 	scheduler.cancel(&hpfp.m_event);
 	hpfp.m_event.scheduling.momentX = getTimeNowNt();
 	HpfpController::pinTurnOn(&hpfp);
@@ -46,11 +48,13 @@ TEST(HPFP, ConfigResetWaitsForArmedCloseBeforeRestarting) {
 
 TEST(HPFP, StopSuppressesArmedOpeningBeforeRestarting) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE, [](engine_configuration_s* cfg) { cfg->hpfpValvePin = Gpio::A2; });
+	Sensor::setMockValue(SensorType::Map, 40);
 	engineConfiguration->hpfpCamLobes = 3;
 	engineConfiguration->hpfpPumpVolume = 0.2;
 	engine->rpmCalculator.setRpmValue(1000);
 	auto& hpfp = *engine->module<HpfpController>();
 	auto& scheduler = *engine->module<TriggerScheduler>();
+	ASSERT_TRUE(hpfp.m_running);
 	scheduler.cancel(&hpfp.m_event);
 	engine->scheduler.schedule(
 			"old opening", &hpfp.m_event.scheduling, getTimeNowNt() + US2NT(1000), {HpfpController::pinTurnOn, &hpfp});
@@ -69,6 +73,30 @@ TEST(HPFP, StopSuppressesArmedOpeningBeforeRestarting) {
 	hpfp.onFastCallback();
 	EXPECT_TRUE(hpfp.m_running);
 	EXPECT_EQ(1, scheduler.getQueueSizeForUnitTest());
+}
+
+TEST(HPFP, TargetTableHasIndependentLoadSource) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	Sensor::setMockValue(SensorType::Map, 80);
+	Sensor::setMockValue(SensorType::Tps1, 20);
+	Sensor::setMockValue(SensorType::FuelPressureHigh, 1000);
+	engineConfiguration->afrOverrideMode = AFR_MAP;
+	config->hpfpTargetLoadSource = AFR_Tps;
+	setLinearCurve(config->hpfpTargetLoadBins, 0, 100, 0.1f);
+	for (size_t row = 0; row < efi::size(config->hpfpTarget); row++) {
+		setArrayValues(config->hpfpTarget[row], 1000 + 100 * config->hpfpTargetLoadBins[row]);
+	}
+	HpfpQuantity math;
+	math.calcPI(2000, 0);
+	EXPECT_NEAR(math.m_pressureTarget_kPa, 3000, 1);
+
+	engineConfiguration->afrOverrideMode = AFR_CylFilling;
+	math.calcPI(2000, 0);
+	EXPECT_NEAR(math.m_pressureTarget_kPa, 3000, 1);
+
+	config->hpfpTargetLoadSource = AFR_MAP;
+	math.calcPI(2000, 0);
+	EXPECT_NEAR(math.m_pressureTarget_kPa, 9000, 1);
 }
 
 TEST(HPFP, Lobe) {
@@ -277,6 +305,7 @@ TEST(HPFP, Schedule) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE, [](engine_configuration_s* cfg) {
 		cfg->hpfpValvePin = Gpio::A2; // arbitrary
 	});
+	Sensor::setMockValue(SensorType::Map, 40);
 
 	setCylinderCount(4);
 	engineConfiguration->hpfpCamLobes = 4;
@@ -380,6 +409,7 @@ TEST(HPFP, Schedule) {
 
 TEST(HPFP, ResumesAfterEngineStop) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE, [](engine_configuration_s* cfg) { cfg->hpfpValvePin = Gpio::A2; });
+	Sensor::setMockValue(SensorType::Map, 40);
 
 	setCylinderCount(4);
 	engineConfiguration->hpfpCamLobes = 3;
@@ -399,6 +429,7 @@ TEST(HPFP, ResumesAfterEngineStop) {
 	}
 
 	int beforeStop = enginePins.hpfpValve.unitTestTurnedOnCounter;
+	ASSERT_TRUE(engine->module<HpfpController>()->m_running);
 	ASSERT_GT(beforeStop, 0) << "pump should be running before the stop";
 
 	// Stopping clears the queue, which drops the pending link in HPFP's on/off/on chain.

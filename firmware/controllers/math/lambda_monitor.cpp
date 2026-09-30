@@ -1,8 +1,13 @@
 #include "pch.h"
 
 #include "lambda_monitor.h"
+#include "airmass_loads.h"
 
-float LambdaMonitor::getMaxAllowedLambda(float rpm, float load) const {
+float LambdaMonitor::getMaxAllowedLambda(float rpm, float /*load*/) const {
+	const float load = getAirmassConsumerLoad(AirmassConsumer::LambdaDeviation);
+	if (!std::isfinite(load)) {
+		return NAN;
+	}
 	return engine->fuelComputer.targetLambda + interpolate3d(
 													   config->lambdaMaxDeviationTable,
 													   config->lambdaMaxDeviationLoadBins,
@@ -46,6 +51,9 @@ bool LambdaMonitorBase::isCurrentlyGood(float rpm, float load) const {
 	// Lambda is always good if disabled
 	if (!engineConfiguration->lambdaProtectionEnable) {
 		return true;
+	}
+	if (!std::isfinite(load)) {
+		return false;
 	}
 
 	// Below min RPM, don't check
@@ -94,6 +102,9 @@ bool LambdaMonitorBase::isCurrentlyGood(float rpm, float load) const {
 }
 
 bool LambdaMonitorBase::restoreConditionsMet(float rpm, float load) const {
+	if (!std::isfinite(load)) {
+		return false;
+	}
 	if (rpm > engineConfiguration->lambdaProtectionRestoreRpm) {
 		return false;
 	}

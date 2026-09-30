@@ -1,8 +1,13 @@
 #include "pch.h"
 #include "airmass_injection_state.h"
+#include "airmass_loads.h"
 
 static bool isComposite(engine_load_mode_e mode) {
 	return mode == LM_SD_ALPHA_N;
+}
+
+static bool needsStandalonePublication(engine_load_mode_e mode) {
+	return mode == LM_SPEED_DENSITY || mode == LM_ALPHA_N || mode == LM_REAL_MAF;
 }
 
 bool AirmassInjectionState::physicallyStopped() const {
@@ -21,11 +26,13 @@ void AirmassInjectionState::publishState() const {
 }
 
 void AirmassInjectionState::latch(AirmassInjectionFault fault) {
+	invalidateAirmassLoads();
 	if (m_status != AirmassInjectionStatus::Latched) {
 		m_fault = fault;
 	}
 	m_status = AirmassInjectionStatus::Latched;
 	m_calculationAccepted = false;
+	m_standaloneReady = false;
 	++m_epoch;
 	publishState();
 }
@@ -42,6 +49,7 @@ void AirmassInjectionState::observeMode(engine_load_mode_e mode) {
 		m_mode = mode;
 		++m_epoch;
 		m_calculationAccepted = false;
+		m_standaloneReady = false;
 		if (m_status != AirmassInjectionStatus::Latched) {
 			m_status = isComposite(mode) ? AirmassInjectionStatus::NotReady : AirmassInjectionStatus::Legacy;
 		}
@@ -54,8 +62,15 @@ AirmassInjectionState::beginCalculation(engine_load_mode_e mode, float rpm, int 
 	chibios_rt::CriticalSectionLocker csl;
 	observeMode(mode);
 	++m_epoch;
-	m_configurationVersion = configurationVersion;
 	m_positiveRpmCalculation = std::isfinite(rpm) && rpm > 0;
+	// Keep the last completed publication available while its replacement is
+	// calculated. Clearing admission on every fast callback can phase-align
+	// with injection teeth and suppress every pulse at a constant engine speed.
+	// Stops, mode/tune changes, and actual failures still close it immediately.
+	if (!m_positiveRpmCalculation || m_configurationVersion != configurationVersion) {
+		m_standaloneReady = false;
+	}
+	m_configurationVersion = configurationVersion;
 	m_calculationAccepted = false;
 	if (!m_positiveRpmCalculation && m_status == AirmassInjectionStatus::Ready) {
 		m_status = AirmassInjectionStatus::NotReady;
@@ -74,6 +89,11 @@ void AirmassInjectionState::rejectCalculation(AirmassInjectionFault fault) {
 	observeMode(engineConfiguration->fuelAlgorithm);
 	if (isComposite(m_mode) && m_positiveRpmCalculation) {
 		latch(fault);
+	} else if (needsStandalonePublication(m_mode)) {
+		m_standaloneReady = false;
+		m_calculationAccepted = false;
+		++m_epoch;
+		invalidateAirmassLoads();
 	}
 }
 
@@ -83,13 +103,33 @@ bool AirmassInjectionState::isCalculationCurrent(CalculationToken token) {
 	return token == m_epoch && m_configurationVersion == engine->getGlobalConfigurationVersion();
 }
 
+AirmassInjectionState::CalculationToken AirmassInjectionState::publicationEpoch() const {
+	chibios_rt::CriticalSectionLocker csl;
+	return m_epoch;
+}
+
 void AirmassInjectionState::completeCalculation(CalculationToken token, bool publicationValid) {
 	chibios_rt::CriticalSectionLocker csl;
 	observeMode(engineConfiguration->fuelAlgorithm);
-	if (!isComposite(m_mode) || m_status == AirmassInjectionStatus::Latched) {
+	if (m_status == AirmassInjectionStatus::Latched) {
 		return;
 	}
 	auto rpm = Sensor::get(SensorType::Rpm);
+	if (needsStandalonePublication(m_mode)) {
+		// A stale completion must not invalidate a newer completed publication.
+		if (token != m_epoch || m_configurationVersion != engine->getGlobalConfigurationVersion()) {
+			return;
+		}
+		m_standaloneReady = m_positiveRpmCalculation && rpm && std::isfinite(rpm.Value) && rpm.Value > 0 &&
+							publicationValid && engine->engineState.airmassCalculationValid;
+		if (!m_standaloneReady) {
+			invalidateAirmassLoads();
+		}
+		return;
+	}
+	if (!isComposite(m_mode)) {
+		return;
+	}
 	if (token != m_epoch || m_configurationVersion != engine->getGlobalConfigurationVersion() ||
 		!m_positiveRpmCalculation || !rpm || !std::isfinite(rpm.Value) || rpm.Value <= 0) {
 		m_status = AirmassInjectionStatus::NotReady;
@@ -106,9 +146,11 @@ void AirmassInjectionState::completeCalculation(CalculationToken token, bool pub
 
 void AirmassInjectionState::onEngineStop() {
 	chibios_rt::CriticalSectionLocker csl;
+	invalidateAirmassLoads(true);
 	++m_epoch;
 	m_calculationAccepted = false;
 	m_positiveRpmCalculation = false;
+	m_standaloneReady = false;
 	if (m_status == AirmassInjectionStatus::Ready) {
 		m_status = AirmassInjectionStatus::NotReady;
 	}
@@ -117,9 +159,13 @@ void AirmassInjectionState::onEngineStop() {
 
 void AirmassInjectionState::onConfigurationWrite(engine_load_mode_e proposedMode, bool strategyChanged) {
 	chibios_rt::CriticalSectionLocker csl;
+	// A tune prepared while physically stopped can qualify on the next start.
+	// A zero RPM sample while still moving cannot clear session invalidation.
+	invalidateAirmassLoads(physicallyStopped());
 	observeMode(engineConfiguration->fuelAlgorithm);
 	++m_epoch;
 	m_calculationAccepted = false;
+	m_standaloneReady = false;
 	if (strategyChanged) {
 		observeMode(proposedMode);
 	}
@@ -132,6 +178,11 @@ void AirmassInjectionState::onConfigurationWrite(engine_load_mode_e proposedMode
 bool AirmassInjectionState::allowInjection() {
 	chibios_rt::CriticalSectionLocker csl;
 	observeMode(engineConfiguration->fuelAlgorithm);
+	if (m_status == AirmassInjectionStatus::Legacy && needsStandalonePublication(m_mode)) {
+		// airmassCalculationValid describes the in-progress calculation. Only
+		// completeCalculation may admit its final per-cylinder publication.
+		return m_standaloneReady && m_configurationVersion == engine->getGlobalConfigurationVersion();
+	}
 	return m_status == AirmassInjectionStatus::Legacy || m_status == AirmassInjectionStatus::Ready;
 }
 
@@ -152,6 +203,7 @@ bool AirmassInjectionState::rearm() {
 	m_fault = AirmassInjectionFault::None;
 	m_calculationAccepted = false;
 	m_positiveRpmCalculation = false;
+	m_standaloneReady = false;
 	m_status = isComposite(m_mode) ? AirmassInjectionStatus::NotReady : AirmassInjectionStatus::Legacy;
 	getFuelSchedule()->invalidate();
 	publishState();

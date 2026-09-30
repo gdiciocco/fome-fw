@@ -20,6 +20,7 @@ void verifyTriggerConfigChangeWithPendingHpfpTimer(bool closing) {
 		cfg->isIgnitionEnabled = false;
 		cfg->isInjectionEnabled = false;
 	});
+	Sensor::setMockValue(SensorType::Map, 40);
 	engine->rpmCalculator.setRpmValue(1000);
 	auto& hpfp = *engine->module<HpfpController>();
 	auto& scheduler = *engine->module<TriggerScheduler>();
@@ -93,6 +94,7 @@ TEST(HPFP, IntegratedSchedule) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE, [](engine_configuration_s* cfg) {
 		cfg->hpfpValvePin = Gpio::A2; // arbitrary
 	});
+	Sensor::setMockValue(SensorType::Map, 40);
 
 	setCylinderCount(4);
 	engineConfiguration->hpfpCamLobes = 3;
