@@ -1067,7 +1067,7 @@ int16_t tps2Max;;"ADC", 1, 0, 0, 1023, 0
 
 	can_baudrate_e can2BaudRate;
 
-	#define load_override_e_enum "Model default", "Measured MAP", "TPS", "Acc Pedal", "Cyl Filling %", "Effective MAP"
+	#define load_override_e_enum "Model default", "Measured MAP", "TPS", "Acc Pedal", "Cyl Filling %", "Effective MAP", "INVALID", "INVALID"
 	custom load_override_e 1 bits, U08, @OFFSET@, [0:2], @@load_override_e_enum@@
 	load_override_e afrOverrideMode;Override the Y axis (load) value used for the AFR table.\nAdvanced users only: If you aren't sure you need this, you probably don't need this.
 
