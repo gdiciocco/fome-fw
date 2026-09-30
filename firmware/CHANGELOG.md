@@ -19,6 +19,7 @@ or
  -
 
 ### Fixed
+ - The small embedded INI drive uses 512-byte clusters so the combined Capoworks definition and documentation fit without enlarging the image.
  - Independent VVT load validation now follows both configured VVT and cranking RPM thresholds, so an inactive VVT source cannot block fuel.
  - 
 
