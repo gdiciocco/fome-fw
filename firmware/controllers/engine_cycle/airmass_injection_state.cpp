@@ -62,10 +62,16 @@ AirmassInjectionState::beginCalculation(engine_load_mode_e mode, float rpm, int 
 	chibios_rt::CriticalSectionLocker csl;
 	observeMode(mode);
 	++m_epoch;
-	m_configurationVersion = configurationVersion;
 	m_positiveRpmCalculation = std::isfinite(rpm) && rpm > 0;
+	// Keep the last completed publication available while its replacement is
+	// calculated. Clearing admission on every fast callback can phase-align
+	// with injection teeth and suppress every pulse at a constant engine speed.
+	// Stops, mode/tune changes, and actual failures still close it immediately.
+	if (!m_positiveRpmCalculation || m_configurationVersion != configurationVersion) {
+		m_standaloneReady = false;
+	}
+	m_configurationVersion = configurationVersion;
 	m_calculationAccepted = false;
-	m_standaloneReady = false;
 	if (!m_positiveRpmCalculation && m_status == AirmassInjectionStatus::Ready) {
 		m_status = AirmassInjectionStatus::NotReady;
 	}
@@ -173,8 +179,9 @@ bool AirmassInjectionState::allowInjection() {
 	chibios_rt::CriticalSectionLocker csl;
 	observeMode(engineConfiguration->fuelAlgorithm);
 	if (m_status == AirmassInjectionStatus::Legacy && needsStandalonePublication(m_mode)) {
-		return m_standaloneReady && engine->engineState.airmassCalculationValid &&
-			   m_configurationVersion == engine->getGlobalConfigurationVersion();
+		// airmassCalculationValid describes the in-progress calculation. Only
+		// completeCalculation may admit its final per-cylinder publication.
+		return m_standaloneReady && m_configurationVersion == engine->getGlobalConfigurationVersion();
 	}
 	return m_status == AirmassInjectionStatus::Legacy || m_status == AirmassInjectionStatus::Ready;
 }

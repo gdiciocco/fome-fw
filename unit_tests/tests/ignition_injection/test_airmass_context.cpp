@@ -566,14 +566,42 @@ TEST(AirmassRevision, UnusedLambdaTargetDoesNotBlockAirCalculationOrPublishFuel)
 TEST(AirmassRevision, StandaloneFuelConversionRejectsInvalidTargetBeforePackedPublication) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	configureMapIndependentAirmass(LM_ALPHA_N);
+	engine->engineState.periodicFastCallback();
+	ASSERT_TRUE(engine->airmassInjectionState.allowInjection());
+	const auto token = engine->airmassInjectionState.beginCalculation(
+			LM_ALPHA_N, 2000, engine->getGlobalConfigurationVersion());
 	// The packed calibration can represent zero lambda, which is an invalid
 	// fuel conversion target. NaN cannot be stored in its integer encoding.
 	setTable(config->lambdaTable, 0);
-	engine->engineState.periodicFastCallback();
+	EXPECT_FLOAT_EQ(getCycleInjectionMass(2000, false), 0);
+	// Known invalid target closes admission before the fast callback finishes.
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	engine->airmassInjectionState.completeCalculation(token, true);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
 	EXPECT_FALSE(engine->engineState.airmassCalculationValid);
 	EXPECT_FLOAT_EQ(engine->fuelComputer.afrTableYAxis, 0);
 	EXPECT_FLOAT_EQ(engine->fuelComputer.targetLambda, 0);
 	EXPECT_FLOAT_EQ(engine->fuelComputer.targetAFR, 0);
 	EXPECT_FLOAT_EQ(engine->fuelComputer.stoichiometricRatio, 0);
 	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+}
+
+TEST(AirmassRevision, StandaloneInputFailureClosesAdmissionBeforeFinalPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	configureMapIndependentAirmass(LM_ALPHA_N);
+	engine->engineState.periodicFastCallback();
+	ASSERT_TRUE(engine->airmassInjectionState.allowInjection());
+	const auto token = engine->airmassInjectionState.beginCalculation(
+			LM_ALPHA_N, 2000, engine->getGlobalConfigurationVersion());
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	EXPECT_FLOAT_EQ(getCycleInjectionMass(2000, false), 0);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+	EXPECT_FLOAT_EQ(engine->cylinders[0].getInjectionMass(), 0);
+	EXPECT_FLOAT_EQ(engine->engineState.injectionDuration, 0);
+	engine->airmassInjectionState.completeCalculation(token, true);
+	EXPECT_FALSE(engine->airmassInjectionState.allowInjection());
+
+	Sensor::setMockValue(SensorType::Iat, 20);
+	engine->engineState.periodicFastCallback();
+	EXPECT_TRUE(engine->airmassInjectionState.allowInjection());
 }

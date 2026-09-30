@@ -320,7 +320,7 @@ TEST(airmassInjectionGate, StandaloneModelsRequireValidPublicationAndRecoverWith
 		ASSERT_EQ(Status::Legacy, gate().status());
 
 		token = beginPositiveCalculation();
-		EXPECT_FALSE(gate().allowInjection());
+		EXPECT_TRUE(gate().allowInjection());
 		engine->engineState.airmassCalculationValid = false;
 		gate().completeCalculation(token, true);
 		EXPECT_FALSE(gate().allowInjection());
@@ -390,5 +390,70 @@ TEST(airmassInjectionGate, StandaloneStopAndTuneWriteRejectStaleCompletion) {
 	EXPECT_FALSE(gate().allowInjection());
 	EXPECT_TRUE(gate().allowPrime());
 	gate().completeCalculation(current, true);
+	EXPECT_FALSE(gate().allowInjection());
+}
+
+TEST(airmassInjectionGate, StandaloneKeepsCompletedFuelAvailableDuringRecalculation) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	for (auto mode : {LM_SPEED_DENSITY, LM_ALPHA_N, LM_REAL_MAF}) {
+		SCOPED_TRACE(static_cast<int>(mode));
+		engineConfiguration->fuelAlgorithm = mode;
+		auto token = beginPositiveCalculation();
+		engine->engineState.airmassCalculationValid = true;
+		gate().completeCalculation(token, true);
+		ASSERT_TRUE(gate().allowInjection());
+
+		// Model evaluation clears its working validity flag before computing a
+		// replacement. Trigger interrupts must still schedule the completed fuel
+		// publication, even if they repeatedly coincide with this calculation.
+		for (int cycle = 0; cycle < 3; cycle++) {
+			token = beginPositiveCalculation();
+			engine->engineState.airmassCalculationValid = false;
+			ASSERT_TRUE(queuePulse(100, 200));
+			eth.moveTimeForwardAndInvokeEventsUs(100);
+			EXPECT_EQ(1, enginePins.injectors[0].getOverlappingCounter());
+			engine->engineState.airmassCalculationValid = true;
+			gate().completeCalculation(token, true);
+			eth.moveTimeForwardAndInvokeEventsUs(100);
+			EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
+			EXPECT_EQ(0, gate().pendingCallbacks());
+		}
+
+		// An actual input failure closes admission before completion. Accepted
+		// closing edges still drain, and a stale completion cannot reopen it.
+		token = beginPositiveCalculation();
+		ASSERT_TRUE(queuePulse(100, 200));
+		eth.moveTimeForwardAndInvokeEventsUs(100);
+		gate().rejectCalculation(Fault::Sensor);
+		EXPECT_FALSE(queuePulse(10, 20));
+		engine->engineState.airmassCalculationValid = true;
+		gate().completeCalculation(token, true);
+		EXPECT_FALSE(gate().allowInjection());
+		eth.moveTimeForwardAndInvokeEventsUs(100);
+		EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
+		EXPECT_EQ(0, gate().pendingCallbacks());
+	}
+}
+
+TEST(airmassInjectionGate, StandaloneRecalculationCannotRetainFuelAcrossInvalidRpmOrVersion) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->fuelAlgorithm = LM_SPEED_DENSITY;
+	for (float invalidRpm : {0.0f, -1.0f, NAN}) {
+		auto token = beginPositiveCalculation();
+		engine->engineState.airmassCalculationValid = true;
+		gate().completeCalculation(token, true);
+		ASSERT_TRUE(gate().allowInjection());
+		gate().beginCalculation(LM_SPEED_DENSITY, invalidRpm, engine->getGlobalConfigurationVersion());
+		EXPECT_FALSE(gate().allowInjection());
+	}
+
+	auto token = beginPositiveCalculation();
+	engine->engineState.airmassCalculationValid = true;
+	gate().completeCalculation(token, true);
+	ASSERT_TRUE(gate().allowInjection());
+	gate().beginCalculation(LM_SPEED_DENSITY, 1000, engine->getGlobalConfigurationVersion() + 1);
+	EXPECT_FALSE(gate().allowInjection());
+	// Returning to the old version does not restore the old admission state.
+	beginPositiveCalculation();
 	EXPECT_FALSE(gate().allowInjection());
 }

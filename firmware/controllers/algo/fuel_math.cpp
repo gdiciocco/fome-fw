@@ -245,7 +245,21 @@ static float getBaseFuelMass(float rpm) {
 	if (engineConfiguration->fuelAlgorithm == LM_SD_ALPHA_N) {
 		return getBlendedBaseFuelMass(rpm);
 	}
+	const bool revisedStandalone = engineConfiguration->fuelAlgorithm == LM_SPEED_DENSITY ||
+								   engineConfiguration->fuelAlgorithm == LM_ALPHA_N ||
+								   engineConfiguration->fuelAlgorithm == LM_REAL_MAF;
+	const auto calculationToken = engine->airmassInjectionState.publicationEpoch();
+	const auto rejectStandalone = [revisedStandalone, calculationToken](AirmassInjectionFault fault) {
+		chibios_rt::CriticalSectionLocker csl;
+		if (revisedStandalone && engine->airmassInjectionState.isCalculationCurrent(calculationToken)) {
+			// Retaining completed fuel during evaluation must not retain it after
+			// an input/result has actually failed. A stale evaluation cannot close
+			// admission for a newer completed publication.
+			engine->airmassInjectionState.rejectCalculation(fault);
+		}
+	};
 	if (!validateAirmassConfiguration()) {
+		rejectStandalone(AirmassInjectionFault::Configuration);
 		return 0;
 	}
 
@@ -254,15 +268,13 @@ static float getBaseFuelMass(float rpm) {
 	efiAssert(ObdCode::CUSTOM_ERR_ASSERT, model != nullptr, "Invalid airmass mode", 0.0f);
 
 	AirmassResult airmass;
-	const bool revisedStandalone = engineConfiguration->fuelAlgorithm == LM_SPEED_DENSITY ||
-								   engineConfiguration->fuelAlgorithm == LM_ALPHA_N ||
-								   engineConfiguration->fuelAlgorithm == LM_REAL_MAF;
 	if (revisedStandalone) {
 		const auto evaluation = engineConfiguration->fuelAlgorithm == LM_SPEED_DENSITY
 									  ? sdAirmass.getAirmassForFuel(rpm)
 							  : engineConfiguration->fuelAlgorithm == LM_ALPHA_N ? alphaNAirmass.getAirmassForFuel(rpm)
 																				 : mafAirmass.getAirmassForFuel(rpm);
 		if (!evaluation.Valid) {
+			rejectStandalone(AirmassInjectionFault::Result);
 			engine->engineState.airmassLoads.Valid = false;
 			engine->engineState.fuelingLoad = 0;
 			engine->engineState.ignitionLoad = 0;
@@ -304,6 +316,7 @@ static float getBaseFuelMass(float rpm) {
 		baseFuelMass = engine->fuelComputer.getCycleFuel(airmass.CylinderAirmass, rpm, airmass.EngineLoadPercent);
 	}
 	if (!std::isfinite(baseFuelMass) || baseFuelMass < 0) {
+		rejectStandalone(AirmassInjectionFault::Result);
 		engine->engineState.baseFuel = 0;
 		return 0;
 	}
@@ -315,6 +328,7 @@ static float getBaseFuelMass(float rpm) {
 		engine->fuelComputer.running.fuel = 0;
 	}
 	if (!std::isfinite(baseFuelMass) || baseFuelMass < 0) {
+		rejectStandalone(AirmassInjectionFault::Result);
 		engine->engineState.baseFuel = 0;
 		return 0;
 	}
