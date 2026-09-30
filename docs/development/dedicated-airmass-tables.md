@@ -1,5 +1,9 @@
 # Stage 2: independent standalone airmass tables
 
+This is the record of the implemented stage 2 behavior. The
+[next revision](blended-airmass-revision.md) removes the dedicated-map opt-in
+and defines the required migration; those changes are not implemented yet.
+
 Guida operativa completa in italiano: [controlli, mappe e procedure](../user/blended-airmass-it.md).
 
 Implemented after the compact evaluation refactor (`642704d219`), on
@@ -75,28 +79,17 @@ The dedicated control is editable in TS with the engine stopped and the VE
 override set to `None`. It can still be disabled to recover an incompatible
 import. Prepare/convert the selected map before enabling it.
 
-## Tune conversion
+## Manual tune restoration (current revision)
 
-The [conversion tool and procedure](../../misc/airmass_conversion/README.md)
-require the original legacy MSQ and the exact target-board INI. The tool creates
-a new MSQ, preserves the original map/axes and unrelated parameters, and copies
-Alpha-N or MAF calibration to its dedicated storage. SD retains its old storage.
-It writes every new map/axis and the opt-in explicitly, preventing stale values
-from absent fields during import into an existing project.
+The first delivery included a converter. It has been removed at the owner's
+request. Dedicated maps are now always active, and the old opt-in and readiness
+flags are retired. Use an untouched TunerStudio backup as the source for manually
+copying controls, cells and both axes into a separate matching project.
+See [the current operator guide](../user/blended-airmass-it.md) and
+[revision implementation record](blended-airmass-implementation.md).
 
-An explicit TPS override on legacy Alpha-N is accepted and normalized to `None`.
-Other non-native overrides require separate recalibration. Existing dedicated
-map fields cause conversion to be rejected, even when disabled, to protect a
-prepared calibration. The generated target signature, map schema and board must
-match; no source file or existing output is overwritten.
-
-After updating firmware, import with the engine stopped, verify the selected
-strategy, maps, both axes and hardware settings, burn, power cycle, and save a
-new MSQ for comparison. Only the original strategy's calibration is carried
-over. Alpha-N/MAF users must prepare an SD calibration before selecting SD.
-
-Before importing an unconverted legacy MSQ, explicitly disable dedicated tables;
-missing MSQ keys do not reset values already in the TS project.
+The other sections in this file record stage 2 and its measured results; they
+are historical evidence, not the current activation or temperature contract.
 
 ## Automated validation
 

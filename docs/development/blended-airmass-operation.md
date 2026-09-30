@@ -1,5 +1,10 @@
 # SD + Alpha-N operation
 
+The [next revision requirements](blended-airmass-revision.md) change activation,
+names, MAP-estimate permission, consumer load selection and endpoint analysis.
+They are planned work. The operating instructions below describe the current
+implementation, including its existing readiness gates and analyzer limits.
+
 Guida operativa completa in italiano: [controlli, mappe e procedure](../user/blended-airmass-it.md).
 
 This document describes the composite implementation on `feature/blended-airmass`.
@@ -106,17 +111,14 @@ does not imply identical pulse widths when lambda or downstream loads differ.
 
 ## Tune compatibility
 
-The flash format changes; a raw old ECU tune is not migrated in place. Back up
-the original MSQ and matching definition before updating. The explicit
-[conversion tool](../../misc/airmass_conversion/README.md) preserves the original
-standalone strategy and initializes new controls without activating blending.
-Restore using the matching firmware definition, inspect the result, and prepare
-the second model and any estimate before marking them ready.
+Use the [current operator guide](../user/blended-airmass-it.md) for manual
+restoration from a TunerStudio backup. No converter or binary migration is
+provided. Match the INI to the firmware, restore the appropriate model map and
+both axes, and review each independent consumer source and correction.
 
-Existing persistent offsets are intended to remain stable. The authority axes,
-table and readiness word add 100 bytes beyond the independent-map stage.
-New output channels add 32 bytes at wire offset 532; later existing live-data
-offsets move by 32 bytes, so logging and TunerStudio require the matching INI.
-Generated layout audits and ARM measurements
-must confirm these totals; calibration growth alone does not measure total RAM,
-stack or execution cost.
+This document records the first delivery's operational contract. The
+[revision requirements](blended-airmass-revision.md) and
+[implementation record](blended-airmass-implementation.md) supersede its earlier
+readiness switches, dedicated-table opt-in, Idle VE exclusion and blanket
+VE Analyze exclusion. Current model equations and input contracts are in
+[airmass-input-contracts](airmass-input-contracts.md).
