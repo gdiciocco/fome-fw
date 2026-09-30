@@ -260,6 +260,7 @@ static void timerCallback(PwmConfig* state) {
 	efitick_t switchTimeNt = state->togglePwmState();
 	if (switchTimeNt == 0) {
 		// we are here when PWM gets stopped
+		state->dbgNestingLevel--;
 		return;
 	}
 
