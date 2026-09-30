@@ -523,6 +523,7 @@ typedef enum __attribute__((__packed__)) {
 	GPPWM_OilPressure = 32,
 	GPPWM_OilTemp = 33,
 	GPPWM_AcState = 34,
+	GPPWM_EffectiveMap = 35,
 } gppwm_channel_e; // TODO Keep pwmAxisLabels in tunerstudio.template.ini in sync when adding additional options to this
 				   // enum
 
@@ -553,7 +554,23 @@ typedef enum __attribute__((__packed__)) {
 	AFR_Tps = 2,
 	AFR_AccPedal = 3,
 	AFR_CylFilling = 4,
+	AFR_EffectiveMAP = 5,
 } load_override_e;
+
+enum class AirmassTemperatureSource : uint8_t {
+	Tcharge,
+	Iat
+};
+enum class IdleVeModel : uint8_t {
+	SpeedDensity,
+	AlphaN
+};
+enum class IdleVeLoadSource : uint8_t {
+	ModelDefault = 0,
+	MeasuredMap = 1,
+	Tps = 2,
+	EffectiveMap = 3
+};
 
 typedef enum __attribute__((__packed__)) {
 	DC_None = 0,

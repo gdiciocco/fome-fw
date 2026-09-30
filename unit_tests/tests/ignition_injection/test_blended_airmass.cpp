@@ -31,14 +31,10 @@ protected:
 	BlendedAirmassTest()
 		: eth(engine_type_e::TEST_ENGINE) {
 		engineConfiguration->fuelAlgorithm = LM_SD_ALPHA_N;
-		engineConfiguration->useDedicatedAirmassTables = true;
 		engineConfiguration->useSeparateVeForIdle = false;
 		engineConfiguration->displacement = 4;
-		engineConfiguration->alphaNUseIat = true;
 		setCylinderCount(4);
 		engine->engineState.sd.tChargeK = 300;
-		config->sdAirmassMapReady = true;
-		config->alphaNAirmassMapReady = true;
 		setTable(config->veTable, 60);
 		setTable(config->alphaNTable, 40);
 		Sensor::setMockValue(SensorType::Map, 50);
@@ -57,7 +53,7 @@ TEST_F(BlendedAirmassTest, AnalyticalAuthorityWeightsUseEachRawModelOnce) {
 	AlphaNAirmass alphaN;
 	BlendedAirmass blended(sd, alphaN);
 	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
-	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 300);
 
 	for (float authority : {0, 25, 50, 75, 100}) {
 		setTable(config->airmassBlendTable, authority);
@@ -121,7 +117,7 @@ TEST_F(BlendedAirmassTest, AuthorityMapUsesTpsRowsAndRpmColumnsWithClampedEdges)
 	ASSERT_TRUE(asymmetric.Airmass.Valid);
 	EXPECT_NEAR(diagnostics.RequestedAuthority, 44, EPS4D);
 	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
-	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 300);
 	EXPECT_NEAR(asymmetric.Airmass.Result.CylinderAirmass, 0.56f * sdMass + 0.44f * alphaNMass, EPS4D);
 
 	Sensor::setMockValue(SensorType::Tps1, 0);
@@ -143,11 +139,11 @@ TEST_F(BlendedAirmassTest, FlatAuthorityEndpointsStayExactAcrossFractionalInputs
 	for (float endpoint : {0, 100}) {
 		setTable(config->airmassBlendTable, endpoint);
 		// A rounded endpoint must not silently evaluate the unused model.
-		engine->engineState.sd.tChargeK = endpoint == 100 ? std::numeric_limits<float>::quiet_NaN() : 300;
-		if (endpoint == 0) {
-			Sensor::setInvalidMockValue(SensorType::Iat);
-		} else {
-			Sensor::setMockValue(SensorType::Iat, 20);
+		// Temperature is shared, so invalidate a branch-specific dependency.
+		config->alphaNBaroCompensation = endpoint == 0;
+		Sensor::setInvalidMockValue(SensorType::BarometricPressure);
+		if (endpoint == 100) {
+			config->veLoadBins[2] = config->veLoadBins[1];
 		}
 		const auto check = [&](float rpm) {
 			SCOPED_TRACE(rpm);
@@ -226,7 +222,7 @@ TEST_F(BlendedAirmassTest, FractionalAuthorityNearEndpointsStillEvaluatesBothMod
 TEST_F(BlendedAirmassTest, CorrectionsApplyOnceAndLoadsResolveFromFinalComposite) {
 	engineConfiguration->useMapEstimateDuringTransient = true;
 	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
-	config->mapEstimateReady = true;
+	config->useMapEstimateTable = true;
 	Sensor::setMockValue(SensorType::Map, 40);
 	Sensor::setMockValue(SensorType::Iat, 27);
 	setTable(config->airmassBlendTable, 25);
@@ -280,53 +276,31 @@ TEST_F(BlendedAirmassTest, CorrectionsApplyOnceAndLoadsResolveFromFinalComposite
 	EXPECT_EQ(result.IgnitionLoad.Source, AirmassLoadSource::EffectiveMap);
 }
 
-TEST_F(BlendedAirmassTest, EndpointsSkipOnlyUnusedModelInputsAndPreserveFaultPrecedence) {
+TEST_F(BlendedAirmassTest, EndpointsSkipUnusedMapAndBaroDependenciesButShareTemperature) {
 	StrictMock<MockVp3d> mapEstimate;
 	SpeedDensityAirmass sd(nullptr, mapEstimate);
 	AlphaNAirmass alphaN;
 	BlendedAirmass blended(sd, alphaN);
-
 	setTable(config->airmassBlendTable, 0);
-	Sensor::setInvalidMockValue(SensorType::Iat);
-	auto sdEndpoint = blended.evaluateAirmass(2200);
-	EXPECT_TRUE(sdEndpoint.Airmass.Valid);
-
+	config->alphaNBaroCompensation = true;
+	Sensor::setInvalidMockValue(SensorType::BarometricPressure);
+	config->alphaNTpsBins[2] = config->alphaNTpsBins[1];
+	EXPECT_TRUE(blended.evaluateAirmass(2200).Airmass.Valid);
 	setTable(config->airmassBlendTable, 100);
-	Sensor::setMockValue(SensorType::Iat, 20);
-	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
-	auto alphaNEndpoint = blended.evaluateAirmass(2200);
-	EXPECT_TRUE(alphaNEndpoint.Airmass.Valid);
-
-	config->sdAirmassMapReady = false;
-	BlendedAirmassDiagnostics readinessDiagnostics;
-	auto missingReadiness = blended.evaluateAirmass(2200, &readinessDiagnostics);
-	EXPECT_FALSE(missingReadiness.Airmass.Valid);
-	EXPECT_EQ(missingReadiness.Fault, AirmassInjectionFault::Configuration);
-	EXPECT_FLOAT_EQ(readinessDiagnostics.RequestedAuthority, 0);
-	EXPECT_FLOAT_EQ(readinessDiagnostics.EffectiveAuthority, 0);
-	config->sdAirmassMapReady = true;
-
-	setTable(config->airmassBlendTable, 50);
-	Sensor::setInvalidMockValue(SensorType::Iat);
+	EXPECT_EQ(blended.evaluateAirmass(2200).Fault, AirmassInjectionFault::Configuration);
+	setLinearCurve(config->alphaNTpsBins, 0, 100, 1);
+	EXPECT_EQ(blended.evaluateAirmass(2200).Fault, AirmassInjectionFault::Sensor);
+	config->alphaNBaroCompensation = false;
+	EXPECT_TRUE(blended.evaluateAirmass(2200).Airmass.Valid);
+	engine->engineState.sd.tChargeK = NAN;
+	for (int authority : {0, 50, 100}) {
+		setTable(config->airmassBlendTable, authority);
+		EXPECT_EQ(blended.evaluateAirmass(2200).Fault, AirmassInjectionFault::Sensor);
+	}
 	engine->engineState.sd.tChargeK = 300;
-	BlendedAirmassDiagnostics sensorDiagnostics;
-	auto activeModelInput = blended.evaluateAirmass(2200, &sensorDiagnostics);
-	EXPECT_FALSE(activeModelInput.Airmass.Valid);
-	EXPECT_EQ(activeModelInput.Fault, AirmassInjectionFault::Sensor);
-	EXPECT_FLOAT_EQ(sensorDiagnostics.RequestedAuthority, 50);
-	EXPECT_FLOAT_EQ(sensorDiagnostics.EffectiveAuthority, 0);
-	EXPECT_FALSE(sensorDiagnostics.Flags & BlendedCalculationValid);
-
-	Sensor::setMockValue(SensorType::Iat, 20);
 	config->veBlends[0].blendParameter = GPPWM_Tps;
 	config->veBlends[0].loadBins[2] = config->veBlends[0].loadBins[1];
-	BlendedAirmassDiagnostics correctionDiagnostics;
-	auto invalidCorrection = blended.evaluateAirmass(2200, &correctionDiagnostics);
-	EXPECT_FALSE(invalidCorrection.Airmass.Valid);
-	EXPECT_EQ(invalidCorrection.Fault, AirmassInjectionFault::Correction);
-	EXPECT_FLOAT_EQ(correctionDiagnostics.RequestedAuthority, 50);
-	EXPECT_FLOAT_EQ(correctionDiagnostics.EffectiveAuthority, 0);
-	EXPECT_FALSE(correctionDiagnostics.Flags & BlendedCalculationValid);
+	EXPECT_EQ(blended.evaluateAirmass(2200).Fault, AirmassInjectionFault::Correction);
 }
 
 TEST_F(BlendedAirmassTest, EvaluatedInvalidRawResultIsDistinctFromMissingInput) {
@@ -349,24 +323,24 @@ TEST_F(BlendedAirmassTest, EvaluatedInvalidRawResultIsDistinctFromMissingInput) 
 	EXPECT_FALSE(diagnostics.Flags & BlendedCalculationValid);
 }
 
-TEST_F(BlendedAirmassTest, EstimatedMapReadinessAndMeasuredOverrideRemainDistinct) {
+TEST_F(BlendedAirmassTest, EstimatedMapPermissionAndMeasuredOverrideRemainDistinct) {
 	setTable(config->airmassBlendTable, 100);
 	Sensor::setInvalidMockValue(SensorType::Map);
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2300, 20)).Times(2).WillRepeatedly(Return(70));
+	EXPECT_CALL(mapEstimate, getValue(2300, 20)).WillOnce(Return(70));
 	SpeedDensityAirmass sd(nullptr, mapEstimate);
 	AlphaNAirmass alphaN;
 	BlendedAirmass blended(sd, alphaN);
 
-	config->mapEstimateReady = false;
+	config->useMapEstimateTable = false;
 	BlendedAirmassDiagnostics readinessDiagnostics;
 	auto missingEstimateReadiness = blended.evaluateAirmass(2300, &readinessDiagnostics);
 	EXPECT_FALSE(missingEstimateReadiness.Airmass.Valid);
-	EXPECT_EQ(missingEstimateReadiness.Fault, AirmassInjectionFault::Configuration);
+	EXPECT_EQ(missingEstimateReadiness.Fault, AirmassInjectionFault::Load);
 	EXPECT_FLOAT_EQ(readinessDiagnostics.RequestedAuthority, 100);
 	EXPECT_FLOAT_EQ(readinessDiagnostics.EffectiveAuthority, 0);
 
-	config->mapEstimateReady = true;
+	config->useMapEstimateTable = true;
 	engineConfiguration->afrOverrideMode = AFR_MAP;
 	BlendedAirmassDiagnostics loadDiagnostics;
 	auto missingMeasuredMap = blended.evaluateAirmass(2300, &loadDiagnostics);
@@ -379,28 +353,28 @@ TEST_F(BlendedAirmassTest, EstimatedMapReadinessAndMeasuredOverrideRemainDistinc
 	EXPECT_FALSE(loadDiagnostics.Flags & BlendedCalculationValid);
 }
 
-TEST_F(BlendedAirmassTest, TransientComparisonRequiresEstimateReadinessWhenMeasuredMapWins) {
+TEST_F(BlendedAirmassTest, DisabledPermissionSkipsTransientComparisonEvenWhenStoredEnabled) {
 	setTable(config->airmassBlendTable, 0);
 	engineConfiguration->useMapEstimateDuringTransient = true;
 	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
 	Sensor::setMockValue(SensorType::Map, 40);
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2300, 20)).Times(2).WillRepeatedly(Return(30));
+	EXPECT_CALL(mapEstimate, getValue(2300, 20)).WillOnce(Return(30));
 	SpeedDensityAirmass sd(nullptr, mapEstimate);
 	AlphaNAirmass alphaN;
 	BlendedAirmass blended(sd, alphaN);
 
 	BlendedAirmassDiagnostics diagnostics;
-	config->mapEstimateReady = false;
+	config->useMapEstimateTable = false;
 	auto missingReadiness = blended.evaluateAirmass(2300, &diagnostics);
-	EXPECT_FALSE(missingReadiness.Airmass.Valid);
-	EXPECT_EQ(missingReadiness.Fault, AirmassInjectionFault::Configuration);
-	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_TRUE(missingReadiness.Airmass.Valid);
+	EXPECT_EQ(missingReadiness.Fault, AirmassInjectionFault::None);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
 	EXPECT_FALSE(diagnostics.Map.UsesEstimate);
 	EXPECT_FLOAT_EQ(diagnostics.RequestedAuthority, 0);
 	EXPECT_FLOAT_EQ(diagnostics.EffectiveAuthority, 0);
 
-	config->mapEstimateReady = true;
+	config->useMapEstimateTable = true;
 	auto ready = blended.evaluateAirmass(2300, &diagnostics);
 	EXPECT_TRUE(ready.Airmass.Valid);
 	EXPECT_FLOAT_EQ(ready.Airmass.Result.EngineLoadPercent, 40);
@@ -415,7 +389,7 @@ TEST_F(BlendedAirmassTest, DryEvaluationDoesNotPublishAndFuelEvaluationIsCoheren
 	AlphaNAirmass alphaN;
 	BlendedAirmass blended(sd, alphaN);
 	const float sdMass = expectedIdealGasMass(4, 4, 60, 50, 300);
-	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 293);
+	const float alphaNMass = expectedIdealGasMass(4, 4, 40, 101.325f, 300);
 
 	engine->outputChannels.blendedSdMass = 11;
 	engine->outputChannels.blendedAlphaNMass = 12;
@@ -598,4 +572,92 @@ TEST_F(BlendedAirmassTest, LambdaLoadStagingPreservesValuesAbovePackedAfrRange) 
 	EXPECT_FLOAT_EQ(engine->fuelComputer.getResolvedLambdaLoad(), 700);
 	EXPECT_FLOAT_EQ(engine->fuelComputer.afrTableYAxis, 655.35f);
 	EXPECT_FLOAT_EQ(engine->engineState.injectionStage2Fraction, 0.6f);
+}
+
+TEST_F(BlendedAirmassTest, SharedTemperatureAndBaroApplyBeforeBlendRegardlessOfStoredHybridOption) {
+	StrictMock<MockVp3d> estimate;
+	SpeedDensityAirmass sd(nullptr, estimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	Sensor::setMockValue(SensorType::Iat, 10);
+	Sensor::setMockValue(SensorType::BarometricPressure, 80);
+	config->alphaNBaroCompensation = true;
+	config->alphaNBaroReferencePressure = 100;
+	configureFlatVeBlend(config->veBlends[0], GPPWM_Tps, GPPWM_Zero, 20);
+	for (auto source : {AirmassTemperatureSource::Tcharge, AirmassTemperatureSource::Iat}) {
+		config->airmassTemperatureSource = source;
+		const float temperature = source == AirmassTemperatureSource::Tcharge ? 300 : 283.15f;
+		const float sdMass = expectedIdealGasMass(4, 4, 60, 50, temperature);
+		const float alphaMass = expectedIdealGasMass(4, 4, 40, 101.325f, temperature) * 0.8f;
+		for (int authority : {0, 25, 100}) {
+			setTable(config->airmassBlendTable, authority);
+			for (bool hybrid : {false, true}) {
+				config->alphaNMultiplyMap = hybrid;
+				BlendedAirmassDiagnostics diagnostics;
+				const auto evaluation = blended.evaluateAirmass(2200, &diagnostics);
+				ASSERT_TRUE(evaluation.Airmass.Valid);
+				EXPECT_FLOAT_EQ(diagnostics.TemperatureK, temperature);
+				EXPECT_EQ(diagnostics.TemperatureSource, source);
+				EXPECT_TRUE(diagnostics.TemperatureValid);
+				EXPECT_FALSE(diagnostics.PressureFlags & 8);
+				const float weight = authority * 0.01f;
+				EXPECT_NEAR(
+						evaluation.Airmass.Result.CylinderAirmass,
+						((1 - weight) * sdMass + weight * alphaMass) * 1.2f,
+						EPS4D);
+				EXPECT_FLOAT_EQ(diagnostics.BaroCoefficient, authority == 0 ? 1 : 0.8f);
+			}
+		}
+	}
+}
+
+namespace {
+struct RevisionIdleController final : public MockIdleController {
+	bool isIdlingOrTaper() const override {
+		return true;
+	}
+};
+} // namespace
+
+TEST_F(BlendedAirmassTest, IdleOverlayRunsOnlyInsideItsContributingModel) {
+	RevisionIdleController idle;
+	engine->engineModules.get<IdleController>().set(&idle);
+	engineConfiguration->useSeparateVeForIdle = true;
+	engineConfiguration->idlePidDeactivationTpsThreshold = 10;
+	Sensor::setMockValue(SensorType::DriverThrottleIntent, 0);
+	setTable(config->idleVeTable, 20);
+	setLinearCurve(config->idleVeLoadBins, 0, 100, 1);
+	setLinearCurve(config->idleVeRpmBins, 0, 2500, 1);
+	StrictMock<MockVp3d> estimate;
+	SpeedDensityAirmass sd(nullptr, estimate);
+	AlphaNAirmass alphaN;
+	BlendedAirmass blended(sd, alphaN);
+	for (auto target : {IdleVeModel::SpeedDensity, IdleVeModel::AlphaN}) {
+		config->idleVeModel = target;
+		for (auto axis : {IdleVeLoadSource::EffectiveMap, IdleVeLoadSource::Tps}) {
+			config->idleVeLoadSource = axis;
+			for (int authority : {0, 50, 100}) {
+				setTable(config->airmassBlendTable, authority);
+				BlendedAirmassDiagnostics diagnostics;
+				const auto result = blended.evaluateAirmass(2200, &diagnostics);
+				ASSERT_TRUE(result.Airmass.Valid);
+				const float sdMass = expectedIdealGasMass(4, 4, target == IdleVeModel::SpeedDensity ? 20 : 60, 50, 300);
+				const float alphaMass =
+						expectedIdealGasMass(4, 4, target == IdleVeModel::AlphaN ? 20 : 40, 101.325f, 300);
+				const float weight = authority * 0.01f;
+				EXPECT_NEAR(result.Airmass.Result.CylinderAirmass, (1 - weight) * sdMass + weight * alphaMass, EPS4D);
+			}
+		}
+	}
+	// Missing measured MAP used solely by Alpha-N's idle table must be ignored
+	// at 0% Alpha-N authority, where SD can use the permitted estimate.
+	config->idleVeModel = IdleVeModel::AlphaN;
+	config->idleVeLoadSource = IdleVeLoadSource::MeasuredMap;
+	config->useMapEstimateTable = true;
+	Sensor::setInvalidMockValue(SensorType::Map);
+	EXPECT_CALL(estimate, getValue(2200, 20)).Times(2).WillRepeatedly(Return(50));
+	setTable(config->airmassBlendTable, 0);
+	EXPECT_TRUE(blended.evaluateAirmass(2200).Airmass.Valid);
+	setTable(config->airmassBlendTable, 50);
+	EXPECT_FALSE(blended.evaluateAirmass(2200).Airmass.Valid);
 }

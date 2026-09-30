@@ -2,6 +2,7 @@
 #include "pch.h"
 
 #include "gppwm_channel.h"
+#include "airmass_loads.h"
 
 #include "ac_control.h"
 #include "table_helper.h"
@@ -15,6 +16,8 @@ expected<float> readGppwmChannel(gppwm_channel_e channel) {
 			return Sensor::get(SensorType::Rpm);
 		case GPPWM_Tps:
 			return Sensor::get(SensorType::Tps1);
+		case GPPWM_EffectiveMap:
+			return getEffectiveAirmassMap();
 		case GPPWM_Map:
 			return Sensor::get(SensorType::Map);
 		case GPPWM_Clt:
@@ -26,9 +29,24 @@ expected<float> readGppwmChannel(gppwm_channel_e channel) {
 		case GPPWM_LuaGauge2:
 			return Sensor::get(SensorType::LuaGauge2);
 		case GPPWM_FuelLoad:
-			return getFuelingLoad();
-		case GPPWM_IgnLoad:
-			return getIgnitionLoad();
+		case GPPWM_IgnLoad: {
+			chibios_rt::CriticalSectionLocker csl;
+			const bool revised = engineConfiguration->fuelAlgorithm == LM_SPEED_DENSITY ||
+								 engineConfiguration->fuelAlgorithm == LM_ALPHA_N ||
+								 engineConfiguration->fuelAlgorithm == LM_REAL_MAF ||
+								 engineConfiguration->fuelAlgorithm == LM_SD_ALPHA_N;
+			const auto& snapshot = engine->engineState.airmassLoads;
+			if (revised &&
+				(!snapshot.Valid || snapshot.ConfigurationVersion != engine->getGlobalConfigurationVersion())) {
+				return unexpected;
+			}
+			const float legacyLoad = channel == GPPWM_FuelLoad ? getFuelingLoad() : getIgnitionLoad();
+			const float load = revised
+					? getAirmassSelectedLoad(channel == GPPWM_FuelLoad ? AFR_None : engineConfiguration->ignOverrideMode,
+							legacyLoad)
+					: legacyLoad;
+			return std::isfinite(load) ? expected<float>(load) : unexpected;
+		}
 		case GPPWM_AuxTemp1:
 			return Sensor::get(SensorType::AuxTemp1);
 		case GPPWM_AuxTemp2:

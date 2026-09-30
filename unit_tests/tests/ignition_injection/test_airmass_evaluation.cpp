@@ -80,6 +80,7 @@ TEST(AirmassEvaluation, LegacyModeIdsRemainStable) {
 
 TEST(AirmassEvaluation, SpeedDensityPublicPostFlagControlsCoherentPublication) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 2.4f;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 310;
@@ -90,9 +91,7 @@ TEST(AirmassEvaluation, SpeedDensityPublicPostFlagControlsCoherentPublication) {
 	StrictMock<MockVp3d> mapEstimate;
 	{
 		InSequence sequence;
-		EXPECT_CALL(mapEstimate, getValue(2500, 15)).WillOnce(Return(79));
 		EXPECT_CALL(veTable, getValue(2500, 47)).WillOnce(Return(63));
-		EXPECT_CALL(mapEstimate, getValue(2500, 15)).WillOnce(Return(81));
 		EXPECT_CALL(veTable, getValue(2500, 52)).WillOnce(Return(68));
 	}
 
@@ -111,7 +110,7 @@ TEST(AirmassEvaluation, SpeedDensityPublicPostFlagControlsCoherentPublication) {
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 68);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 52);
 	EXPECT_FLOAT_EQ(engine->engineState.idleVeTableYAxis, 52);
-	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 81);
+	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 94);
 	for (size_t i = 0; i < VE_BLEND_COUNT; i++) {
 		EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.veBlendOutput[i]), 0);
 	}
@@ -119,9 +118,10 @@ TEST(AirmassEvaluation, SpeedDensityPublicPostFlagControlsCoherentPublication) {
 
 TEST(AirmassEvaluation, AlphaNUsesTpsNativeLoadAndTemperature) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 3.2f;
 	setCylinderCount(4);
-	engineConfiguration->alphaNUseIat = true;
+	config->airmassTemperatureSource = AirmassTemperatureSource::Iat;
 	Sensor::setMockValue(SensorType::Tps1, 12.5f);
 	Sensor::setMockValue(SensorType::Iat, -3);
 
@@ -130,7 +130,7 @@ TEST(AirmassEvaluation, AlphaNUsesTpsNativeLoadAndTemperature) {
 	AlphaNAirmass dut(&veTable);
 
 	auto result = dut.getAirmass(1800, true);
-	EXPECT_NEAR(result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 52, 101.325f, 270), EPS4D);
+	EXPECT_NEAR(result.CylinderAirmass, expectedIdealGasMass(3.2f, 4, 52, 101.325f, 270.15f), EPS4D);
 	EXPECT_FLOAT_EQ(result.EngineLoadPercent, 12.5f);
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 52);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 12.5f);
@@ -138,6 +138,7 @@ TEST(AirmassEvaluation, AlphaNUsesTpsNativeLoadAndTemperature) {
 
 TEST(AirmassEvaluation, InvalidAlphaNTpsPreservesPublishedVeDiagnostics) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	StrictMock<MockVp3d> veTable;
 	AlphaNAirmass dut(&veTable);
 	Sensor::resetMockValue(SensorType::Tps1);
@@ -164,6 +165,7 @@ TEST(AirmassEvaluation, InvalidAlphaNTpsPreservesPublishedVeDiagnostics) {
 
 TEST(AirmassEvaluation, AlphaNCaptureMatchesNoCaptureAndResetsOnFailure) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 3.2f;
 	setCylinderCount(4);
 	Sensor::setMockValue(SensorType::Tps1, 18);
@@ -199,20 +201,20 @@ TEST(AirmassEvaluation, AlphaNCaptureMatchesNoCaptureAndResetsOnFailure) {
 
 TEST(AirmassEvaluation, InvalidSpeedDensityTemperaturePublishesOnlyMapSnapshot) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
 	Sensor::setMockValue(SensorType::Tps1, 24);
 	Sensor::setMockValue(SensorType::Map, 46);
 
 	StrictMock<MockVp3d> veTable;
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2100, 24)).WillOnce(Return(73));
 	SpeedDensityAirmass dut(&veTable, mapEstimate);
 	seedPublishedDiagnostics();
 
 	auto result = dut.getAirmass(2100, true);
 	EXPECT_FLOAT_EQ(result.CylinderAirmass, 0);
 	EXPECT_FLOAT_EQ(result.EngineLoadPercent, 100);
-	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 73);
+	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 94);
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 91);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 92);
 	EXPECT_FLOAT_EQ(engine->engineState.idleVeTableYAxis, 93);
@@ -223,6 +225,7 @@ TEST(AirmassEvaluation, InvalidSpeedDensityTemperaturePublishesOnlyMapSnapshot) 
 
 TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailure) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 2.4f;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 310;
@@ -231,7 +234,6 @@ TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailu
 
 	StrictMock<MockVp3d> veTable;
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2100, 24)).Times(4).WillRepeatedly(Return(73));
 	EXPECT_CALL(veTable, getValue(2100, 46)).Times(2).WillRepeatedly(Return(58));
 	SpeedDensityAirmass dut(&veTable, mapEstimate);
 	seedPublishedDiagnostics();
@@ -245,9 +247,9 @@ TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailu
 	EXPECT_TRUE(diagnostics.Ve.Valid);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 58);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 46);
-	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
 	EXPECT_TRUE(diagnostics.Map.Valid);
-	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 73);
+	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 0);
 
 	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
 	auto failedWithoutCapture = dut.evaluateAirmass(2100);
@@ -257,9 +259,9 @@ TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailu
 	EXPECT_FALSE(failedWithCapture.Valid);
 	EXPECT_FALSE(diagnostics.Ve.HasValue);
 	EXPECT_FALSE(diagnostics.Ve.Valid);
-	EXPECT_TRUE(diagnostics.Map.HasValue);
+	EXPECT_FALSE(diagnostics.Map.HasValue);
 	EXPECT_TRUE(diagnostics.Map.Valid);
-	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 73);
+	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 0);
 	expectSeededDiagnostics();
 }
 
@@ -268,35 +270,26 @@ TEST(AirmassEvaluation, MapSnapshotTracksTransientEstimateValidity) {
 	StrictMock<MockVp3d> veTable;
 	StrictMock<MockVp3d> mapEstimate;
 	SpeedDensityAirmass dut(&veTable, mapEstimate);
+	config->useMapEstimateTable = true;
 	engineConfiguration->useMapEstimateDuringTransient = true;
 	engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold = true;
 	Sensor::setMockValue(SensorType::Map, 40);
 	Sensor::setMockValue(SensorType::Tps1, 20);
-
 	EXPECT_CALL(mapEstimate, getValue(3000, 20)).WillOnce(Return(75));
 	auto validEstimate = dut.evaluateMap(3000);
 	EXPECT_TRUE(validEstimate.Valid);
 	EXPECT_TRUE(validEstimate.UsesEstimate);
 	EXPECT_FLOAT_EQ(validEstimate.Map, 75);
-	EXPECT_FLOAT_EQ(validEstimate.FallbackMap, 75);
-
 	Sensor::setInvalidMockValue(SensorType::Tps1);
-	EXPECT_CALL(mapEstimate, getValue(3000, 0)).WillOnce(Return(75));
-	auto invalidEstimate = dut.evaluateMap(3000);
-	EXPECT_FALSE(invalidEstimate.Valid);
-	EXPECT_TRUE(invalidEstimate.UsesEstimate);
-	EXPECT_FLOAT_EQ(invalidEstimate.Map, 75);
-
-	// An invalid TPS does not invalidate a measured MAP when the unused estimate is lower.
-	EXPECT_CALL(mapEstimate, getValue(3000, 0)).WillOnce(Return(30));
-	auto measuredMap = dut.evaluateMap(3000);
-	EXPECT_TRUE(measuredMap.Valid);
-	EXPECT_FALSE(measuredMap.UsesEstimate);
-	EXPECT_FLOAT_EQ(measuredMap.Map, 40);
+	// Comparison requires a valid TPS even if measured MAP might win.
+	EXPECT_FALSE(dut.evaluateMap(3000).Valid);
+	engineConfiguration->useMapEstimateDuringTransient = false;
+	EXPECT_TRUE(dut.evaluateMap(3000).Valid);
 }
 
 TEST(AirmassEvaluation, ModelSnapshotsRemainIndependentUntilPublished) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 4.0f;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 300;
@@ -306,7 +299,6 @@ TEST(AirmassEvaluation, ModelSnapshotsRemainIndependentUntilPublished) {
 	StrictMock<MockVp3d> sdVeTable;
 	StrictMock<MockVp3d> alphaNVeTable;
 	StrictMock<MockVp3d> mapEstimate;
-	EXPECT_CALL(mapEstimate, getValue(2000, 11)).WillOnce(Return(70));
 	EXPECT_CALL(sdVeTable, getValue(2000, 45)).WillOnce(Return(60));
 	EXPECT_CALL(alphaNVeTable, getValue(2000, 11)).WillOnce(Return(30));
 	SpeedDensityAirmass sd(&sdVeTable, mapEstimate);
@@ -319,7 +311,7 @@ TEST(AirmassEvaluation, ModelSnapshotsRemainIndependentUntilPublished) {
 	auto alphaNEvaluation = alphaN.evaluateAirmass(2000, &alphaNDiagnostics);
 	EXPECT_NEAR(sdEvaluation.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 60, 45, 300), EPS4D);
 	EXPECT_FLOAT_EQ(sdEvaluation.Result.EngineLoadPercent, 45);
-	EXPECT_NEAR(alphaNEvaluation.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 30, 101.325f, 293), EPS4D);
+	EXPECT_NEAR(alphaNEvaluation.Result.CylinderAirmass, expectedIdealGasMass(4, 4, 30, 101.325f, 300), EPS4D);
 	EXPECT_FLOAT_EQ(alphaNEvaluation.Result.EngineLoadPercent, 11);
 	EXPECT_FLOAT_EQ(sdDiagnostics.Ve.Ve, 60);
 	EXPECT_FLOAT_EQ(alphaNDiagnostics.Ve.Ve, 30);
@@ -329,11 +321,12 @@ TEST(AirmassEvaluation, ModelSnapshotsRemainIndependentUntilPublished) {
 	AirmassVeModelBase::publishEvaluation(sdDiagnostics);
 	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 60);
 	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 45);
-	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 70);
+	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 94);
 }
 
 TEST(AirmassEvaluation, LuaModelQueriesAreDryReads) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 4.0f;
 	setCylinderCount(4);
 	engine->engineState.sd.tChargeK = 300;
@@ -342,6 +335,8 @@ TEST(AirmassEvaluation, LuaModelQueriesAreDryReads) {
 	Sensor::setMockValue(SensorType::Map, 50);
 	Sensor::setMockValue(SensorType::Maf, 72);
 	setTable(config->veTable, 50);
+	setTable(config->alphaNTable, 50);
+	setTable(config->mafTable, 50);
 	setLinearCurve(config->veLoadBins, 0, 100, 1);
 	setLinearCurve(config->veRpmBins, 0, 7000, 1);
 	setTable(config->mapEstimateTable, 70);
@@ -356,7 +351,7 @@ TEST(AirmassEvaluation, LuaModelQueriesAreDryReads) {
 			EPS4D);
 	EXPECT_NEAR(
 			testLuaReturnsNumber("function testFunc() return getAirmass(2) end"),
-			expectedIdealGasMass(4, 4, 50, 101.325f, 293),
+			expectedIdealGasMass(4, 4, 50, 101.325f, 300),
 			EPS4D);
 	// 72 kg/h = 20 g/s; at 1200 rpm and four cylinders this is 0.5 g/cylinder before the 50% table.
 	EXPECT_NEAR(testLuaReturnsNumber("function testFunc() return getAirmass(1) end"), 0.25f, EPS4D);
@@ -365,17 +360,18 @@ TEST(AirmassEvaluation, LuaModelQueriesAreDryReads) {
 
 TEST(AirmassEvaluation, IdleTaperThenCompoundsCorrectionsAndPublishesCapturedAxes) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	StrictMock<MockVp3d> veTable;
 	EXPECT_CALL(veTable, getValue(2300, 35)).WillOnce(Return(60));
 
 	TestIdleController idle;
 	engine->engineModules.get<IdleController>().set(&idle);
 	engineConfiguration->useSeparateVeForIdle = true;
-	engineConfiguration->idleVeOverrideMode = VE_TPS;
+	config->idleVeLoadSource = IdleVeLoadSource::Tps;
 	engineConfiguration->idlePidDeactivationTpsThreshold = 10;
 	setTable(config->idleVeTable, 40);
 	setLinearCurve(config->idleVeLoadBins, 0, 100, 1);
-	setLinearCurve(config->idleVeRpmBins, 0, 7000, 1);
+	setLinearCurve(config->idleVeRpmBins, 0, 2500, 1);
 
 	configureFlatVeBlend(config->veBlends[0], GPPWM_Clt, GPPWM_Zero, 20);
 	configureFlatVeBlend(config->veBlends[1], GPPWM_Iat, GPPWM_Map, -25);
@@ -425,6 +421,7 @@ TEST(AirmassEvaluation, IdleTaperThenCompoundsCorrectionsAndPublishesCapturedAxe
 
 TEST(AirmassEvaluation, DualMafUsesSumAndSingleBankFallbacks) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 2.0f;
 	setCylinderCount(4);
 	Sensor::setMockValue(SensorType::Maf, 40);
@@ -465,6 +462,7 @@ TEST(AirmassEvaluation, DualMafUsesSumAndSingleBankFallbacks) {
 
 TEST(AirmassEvaluation, MafCaptureMatchesNoCaptureAndRpmZeroClearsReuse) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engine->engineState.sd.tChargeK = 293.15f;
 	engineConfiguration->displacement = 2.0f;
 	setCylinderCount(4);
 	Sensor::setMockValue(SensorType::Maf, 72);
@@ -484,18 +482,18 @@ TEST(AirmassEvaluation, MafCaptureMatchesNoCaptureAndRpmZeroClearsReuse) {
 	EXPECT_TRUE(diagnostics.Ve.Valid);
 	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 80);
 
-	// A failed sensor still runs the legacy zero-flow VE lookup at nonzero RPM.
+	// A failed MAF cannot publish a valid model or consumer snapshot.
 	Sensor::setInvalidMockValue(SensorType::Maf);
 	auto invalidSensorWithoutCapture = dut.evaluateAirmass(6000);
 	auto invalidSensorWithCapture = dut.evaluateAirmass(6000, &diagnostics);
 	expectSameEvaluation(invalidSensorWithoutCapture, invalidSensorWithCapture);
 	EXPECT_FALSE(invalidSensorWithCapture.Valid);
-	EXPECT_TRUE(diagnostics.Ve.HasValue);
-	EXPECT_TRUE(diagnostics.Ve.Valid);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.Valid);
 
 	// RPM zero exits before VE evaluation and must clear presence on a reused capture.
 	auto failedWithoutCapture = dut.evaluateAirmass(0);
-	EXPECT_TRUE(diagnostics.Ve.HasValue);
+	EXPECT_FALSE(diagnostics.Ve.HasValue);
 	auto failedWithCapture = dut.evaluateAirmass(0, &diagnostics);
 	expectSameEvaluation(failedWithoutCapture, failedWithCapture);
 	EXPECT_FALSE(failedWithCapture.Valid);
@@ -504,4 +502,21 @@ TEST(AirmassEvaluation, MafCaptureMatchesNoCaptureAndRpmZeroClearsReuse) {
 	EXPECT_FALSE(diagnostics.Map.HasValue);
 	EXPECT_FALSE(diagnostics.Map.Valid);
 	expectSeededDiagnostics();
+}
+
+TEST(AirmassEvaluation, MafRejectsNonfiniteInputsBeforeInterpolationOrPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	StrictMock<MockVp3d> veTable;
+	MafAirmass maf(&veTable);
+	seedPublishedDiagnostics();
+	for (float invalid : {NAN, INFINITY, -1.0f}) {
+		EXPECT_FALSE(maf.evaluateAirmassImpl(invalid, 2000).Valid);
+		EXPECT_FALSE(maf.evaluateAirmassImpl(72, invalid).Valid);
+		Sensor::setMockValue(SensorType::Maf, invalid);
+		Sensor::setInvalidMockValue(SensorType::Maf2);
+		const auto result = maf.getAirmassForFuel(2000);
+		EXPECT_FALSE(result.Valid);
+		EXPECT_FLOAT_EQ(result.Result.CylinderAirmass, 0);
+		expectSeededDiagnostics();
+	}
 }

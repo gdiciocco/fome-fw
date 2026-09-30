@@ -202,14 +202,17 @@ BlendResult calculateBlend(blend_table_s& cfg, float rpm, float load) {
 
 	auto value = readGppwmChannel(cfg.blendParameter);
 
-	if (!value) {
+	if (!value || !std::isfinite(value.Value)) {
 		return {0, 0, 0, 0};
 	}
 
 	// Override Y axis value (if necessary)
 	if (cfg.yAxisOverride != GPPWM_Zero) {
-		// TODO: is this value_or(0) correct or even reasonable?
-		load = readGppwmChannel(cfg.yAxisOverride).value_or(0);
+		auto selectedLoad = readGppwmChannel(cfg.yAxisOverride);
+		if (!selectedLoad || !std::isfinite(selectedLoad.Value)) {
+			return {0, 0, 0, 0};
+		}
+		load = selectedLoad.Value;
 	}
 
 	return calculateBlend(cfg, rpm, load, value.Value);

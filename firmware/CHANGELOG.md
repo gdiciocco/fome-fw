@@ -31,11 +31,12 @@ or
 ## Unreleased
 
 ### Breaking Changes
- - The calibration flash format has changed for independent airmass maps and blend authority/readiness settings. Back up your tune before updating, then restore and validate it using the matching firmware definition. Disable dedicated airmass tables before importing an unconverted legacy tune; existing ECU flash tunes are not migrated in place.
+ - The calibration layout now includes dedicated airmass maps and independent load selectors. Back up the TunerStudio project, MSQ and matching INI before updating. Restore cells, both axes and controls manually with the new definition; old binary flash tunes are not migrated and no automatic MSQ converter is provided. Dedicated maps are always used; the main VE axis override and manual map-readiness switches are retired.
 
 ### Added
- - Opt-in SD + Alpha-N air-mass blending with an 8 x 8 RPM/TPS authority table and independent 16 x 16 model maps. Default load remains effective MAP. Activation requires prepared maps, natural VE axes and no shared idle VE table. Required-input faults latch injection off until stopped, drained and explicitly rearmed. Priming and VE Analyze are disabled in composite mode; MAF remains standalone.
- - Optional independent 16 x 16 Alpha-N filling and MAF correction maps, each with its own RPM and load axes. Alpha-N supports fractional TPS breakpoints. Enable dedicated airmass tables only after preparing or converting the selected strategy's calibration; the default remains the legacy shared VE table. Dedicated tables use natural load axes and require the VE load override to be None. Separate TunerStudio editors and VE Analyze bindings follow the selected standalone strategy.
+ - SD + Alpha-N mass blending with an 8 x 8 RPM/TPS authority table and separate 16 x 16 SD VE, Alpha-N reference-filling and standalone MAF correction maps. Every downstream table/control has an independent load source, including cylinder trims and knock gains. Explicit measured MAP and effective MAP remain distinct.
+ - Shared Tcharge/IAT selection for SD and Alpha-N; optional standalone Alpha-N Multiply MAP; optional pure Alpha-N BARO/reference correction before blending. A general Use MAP estimate table permission controls fallback and subordinate transient estimation.
+ - One Idle VE table with an independent load axis and a selected SD/Alpha-N owner in blending. VE Analyze can target a qualified whole-session uniform endpoint with Idle VE disabled; mixed contributions are excluded. Composite faults retain stopped-engine rearm, while standalone invalid calculations temporarily inhibit injection until valid publication.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
@@ -58,6 +59,7 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - SD binary logs now encode the complete 32-bit MLG data offset, including telemetry headers larger than 64 KiB.
  - Flat 100% Alpha-N authority now stays exactly at the endpoint during RPM/TPS interpolation, preventing false composite configuration faults and unintended evaluation of the SD model.
  - Composite injection state and latched fault labels in TunerStudio now follow live output channels.
  - A failed start that never reports positive RPM now reaches the stopped state after trigger timeout, allowing explicit rearm of latched composite injection faults.

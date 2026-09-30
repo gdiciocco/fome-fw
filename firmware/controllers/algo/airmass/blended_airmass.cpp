@@ -3,9 +3,6 @@
 #include "blended_airmass.h"
 #include "alphan_airmass.h"
 #include "speed_density_airmass.h"
-#if EFI_HPFP
-#include "pin_repository.h"
-#endif
 
 template <typename T, size_t N>
 static bool validAuthorityAxis(const T (&axis)[N], float maximum) {
@@ -21,8 +18,11 @@ static bool validAuthorityAxis(const T (&axis)[N], float maximum) {
 }
 
 bool isBlendedAirmassConfigurationValid() {
-	if (!isRawAirmassConfigurationValid() || engineConfiguration->useSeparateVeForIdle || !config->sdAirmassMapReady ||
-		!config->alphaNAirmassMapReady || !std::isfinite(engineConfiguration->displacement) ||
+	if (engineConfiguration->useSeparateVeForIdle && config->idleVeModel != IdleVeModel::SpeedDensity &&
+		config->idleVeModel != IdleVeModel::AlphaN) {
+		return false;
+	}
+	if (!isRawAirmassConfigurationValid() || !std::isfinite(engineConfiguration->displacement) ||
 		engineConfiguration->displacement <= 0 || engine->engineState.cylinderCount <= 0 ||
 		!validAuthorityAxis(config->airmassBlendTpsBins, 100) ||
 		!validAuthorityAxis(config->airmassBlendRpmBins, 18000)) {
@@ -65,6 +65,8 @@ public:
 			capture->Corrections.HasValue = false;
 			capture->Corrections.Valid = false;
 			capture->Flags = 0;
+			capture->TemperatureValid = false;
+			capture->BaroCoefficient = 1;
 		}
 	}
 
@@ -113,6 +115,23 @@ public:
 		}
 	}
 
+	void inputs(const AirmassInputs& inputs) {
+		if (m_capture) {
+			m_capture->TemperatureK = inputs.TemperatureK;
+			m_capture->TemperatureValid = inputs.TemperatureValid;
+			m_capture->TemperatureSource = inputs.TemperatureSource;
+			m_capture->PressureFlags = getAirmassPressureFlags(inputs, false);
+		}
+		if (m_postState) {
+			publishAirmassTemperature(inputs);
+			publishAirmassPressure(inputs, 1, false);
+		}
+	}
+
+	bool consumers(const AirmassInputs& inputs, mass_t mass) {
+		return processAirmassConsumerLoads(inputs, mass, m_postState);
+	}
+
 	void authority(float value) {
 		if (m_capture) {
 			m_capture->RequestedAuthority = value;
@@ -132,6 +151,9 @@ public:
 		if (m_capture) {
 			(sd ? m_capture->SdMass : m_capture->AlphaNMass) = value.Result.CylinderAirmass;
 			(sd ? m_capture->Sd : m_capture->AlphaN) = raw;
+			if (!sd) {
+				m_capture->BaroCoefficient = raw.BaroCoefficient;
+			}
 		}
 		if (m_postState) {
 			auto& output = engine->outputChannels;
@@ -147,6 +169,10 @@ public:
 				output.blendedAlphaNMass = mass;
 				output.blendedAlphaNLoad = load;
 				output.blendedAlphaNVe = tableValue;
+				output.alphaNBaroCoefficient = raw.BaroCoefficient;
+			}
+			if (raw.IdleWeight > 0) {
+				engine->engineState.idleVeTableYAxis = raw.IdleLoad;
 			}
 		}
 	}
@@ -217,6 +243,10 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	}
 	AirmassInputs inputs;
 	m_sd.captureInputs(rpm, inputs);
+	inputs.Composite = true;
+	inputs.Model = LM_SD_ALPHA_N;
+	inputs.NativeLoad = inputs.EffectiveMap.Map;
+	diagnostics.inputs(inputs);
 	diagnostics.map(inputs.EffectiveMap);
 	// TPS selects authority even at a mass endpoint. MAP remains required by the
 	// default load and common corrections, independently of either mass branch.
@@ -231,20 +261,10 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	// the domain edges without snapping legitimate fractional authority.
 	const float authority = clampF(0, interpolatedAuthority, 100);
 	diagnostics.authority(authority);
-	if (inputs.EffectiveMap.HasValue && !config->mapEstimateReady) {
+	if ((authority < 100 && !isAirmassModelConfigurationValid(LM_SPEED_DENSITY)) ||
+		(authority > 0 && !isAirmassModelConfigurationValid(LM_ALPHA_N))) {
 		return fail(AirmassInjectionFault::Configuration);
 	}
-	if (!inputs.EffectiveMap.Valid) {
-		return fail(AirmassInjectionFault::Load);
-	}
-#if EFI_HPFP
-	// The HPFP target-pressure table uses measured MAP independently of the
-	// composite's effective MAP. An estimate cannot satisfy that dependency.
-	if (engineConfiguration->hpfpCamLobes > 0 && engineConfiguration->hpfpPumpVolume > 0 &&
-		isBrainPinValid(engineConfiguration->hpfpValvePin) && !resolveAirmassLoad(inputs, 0, AFR_MAP).Valid) {
-		return fail(AirmassInjectionFault::Load);
-	}
-#endif
 	float sdMass = 0;
 	float alphaNMass = 0;
 	if (authority < 100) {
@@ -258,7 +278,7 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	}
 	if (authority > 0) {
 		RawAirmassDiagnostics raw;
-		auto alphaN = m_alphaN.evaluateRawAirmass(inputs, &raw);
+		auto alphaN = m_alphaN.evaluateRawAirmass(inputs, &raw, AlphaNPressurePolicy::PureReference);
 		diagnostics.branch(false, alphaN, raw);
 		if (!alphaN.Valid) {
 			return fail(raw.HasValue ? AirmassInjectionFault::Result : AirmassInjectionFault::Sensor);
@@ -285,10 +305,10 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	evaluation.NormalizedFilling = filling.Value;
 	evaluation.LambdaLoad = resolveAirmassLoad(inputs, mass, inputs.LambdaOverride);
 	evaluation.IgnitionLoad = resolveAirmassLoad(inputs, mass, inputs.IgnitionOverride);
-	if (!evaluation.LambdaLoad.Valid || !evaluation.IgnitionLoad.Valid) {
+	if (!diagnostics.consumers(inputs, mass)) {
 		return fail(AirmassInjectionFault::Load);
 	}
-	evaluation.Airmass.Result = {mass, inputs.EffectiveMap.Map};
+	evaluation.Airmass.Result = {mass, inputs.EffectiveMap.Valid ? inputs.EffectiveMap.Map : 0};
 	evaluation.Airmass.Valid = true;
 	diagnostics.finish(true);
 	return evaluation;

@@ -23,8 +23,7 @@ struct AirmassModelBase {
 
 struct VeEvaluation {
 	percent_t Ve = 0;
-	// Missing correction inputs retain calculateBlend's neutral fallback. Validate
-	// those separately before enabling a composite mode.
+	// Required table, idle and correction inputs are valid.
 	bool Valid = false;
 };
 
@@ -38,8 +37,7 @@ struct VeDiagnostics {
 	BlendResult Blends[VE_BLEND_COUNT] = {};
 	// Diagnostics were calculated and may be published even when Valid is false.
 	bool HasValue = false;
-	// calculateBlend retains its neutral fallback for unavailable correction inputs;
-	// their validity must be checked separately before enabling a composite mode.
+	// Includes validity of every enabled correction input.
 	bool Valid = false;
 };
 
@@ -55,26 +53,41 @@ struct MapEvaluation {
 // not atomic. Maps remain in configuration storage and must not be copied here.
 // Optional inputs retain their own validity: an unused input cannot fail a model.
 struct AirmassInputs {
+	// Captured together before sensor acquisition. A stop, tune write, or new
+	// calculation must prevent this capture from publishing consumer state.
+	uint32_t PublicationEpoch = 0;
+	int ConfigurationVersion = 0;
+	engine_load_mode_e ActiveStrategy = LM_SPEED_DENSITY;
+	bool HasPublicationContext = false;
 	float Rpm = 0;
 	expected<float> MeasuredMap = unexpected;
 	expected<float> Tps = unexpected;
 	expected<float> Pedal = unexpected;
 	expected<float> Iat = unexpected;
 	MapEvaluation EffectiveMap;
-	float ChargeTemperatureK = 0;
+	float TemperatureK = 0;
+	bool TemperatureValid = false;
+	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
+	expected<float> BarometricPressure = unexpected;
+	expected<float> DriverThrottleIntent = unexpected;
+	bool BaroFromStartup = false;
+	bool IdleActive = false;
+	bool Composite = false;
+	engine_load_mode_e Model = LM_SPEED_DENSITY;
+	float NativeLoad = 0;
 	float Displacement = 0;
 	float CylinderCount = 0;
 	float PreviousFuelingLoad = 0;
 	float PreviousIgnitionLoad = 0;
 	load_override_e LambdaOverride = AFR_None;
 	load_override_e IgnitionOverride = AFR_None;
-	bool AlphaNUseIat = false;
-	bool DedicatedTables = false;
-	bool ConfigurationValid = false;
 };
 
 struct RawAirmassDiagnostics {
 	float TableValue = 0;
+	float IdleLoad = 0;
+	float IdleWeight = 0;
+	float BaroCoefficient = 1;
 	bool HasValue = false;
 	bool Valid = false;
 };
@@ -125,6 +138,12 @@ VeCorrectionEvaluation evaluateAirmassCorrectionsForFuel(const AirmassInputs& in
 bool isMapEstimateConfigurationValid();
 bool isMapEstimateAxesValid();
 bool isRawAirmassConfigurationValid();
+bool isAirmassModelConfigurationValid(engine_load_mode_e model);
+void captureAirmassInputs(
+		float rpm, AirmassInputs& inputs, const ValueProvider3D* estimate = nullptr, bool resolveMap = true);
+void resolveCapturedMap(AirmassInputs& inputs, const ValueProvider3D* estimate = nullptr);
+// Implemented by the live load consumer owner. Dry queries validate without publication.
+bool processAirmassConsumerLoads(const AirmassInputs& inputs, mass_t mass, bool publish);
 
 struct AirmassEvaluation {
 	AirmassResult Result;
@@ -134,14 +153,25 @@ struct AirmassEvaluation {
 	bool Valid = false;
 };
 
+// Pressure flags: 1 continuous BARO, 2 startup BARO, 4 invalid BARO,
+// 8 standalone MAP multiplication. Coefficient is 1 when BARO is inapplicable.
+uint8_t getAirmassPressureFlags(const AirmassInputs& inputs, bool multiplyMap);
+void publishAirmassTemperature(const AirmassInputs& inputs);
+void publishAirmassPressure(const AirmassInputs& inputs, float coefficient, bool multiplyMap);
+
 struct AirmassDiagnostics {
+	float TemperatureK = 0;
+	bool TemperatureValid = false;
+	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
+	float BaroCoefficient = 1;
+	uint8_t PressureFlags = 0;
 	VeDiagnostics Ve;
 	MapEvaluation Map;
 };
 
 class AirmassVeModelBase : public AirmassModelBase {
 public:
-	explicit AirmassVeModelBase(const ValueProvider3D* veTable);
+	explicit AirmassVeModelBase(const ValueProvider3D* veTable, engine_load_mode_e model = LM_SPEED_DENSITY);
 
 	// Retrieve the user-calibrated volumetric efficiency from the table
 	float getVe(float rpm, percent_t load, bool postState) const;
@@ -153,7 +183,9 @@ public:
 	virtual float getVeImpl(float /*rpm*/, percent_t /*load*/) const;
 
 protected:
-	VeEvaluation evaluateRawVe(float rpm, float load, RawAirmassDiagnostics* diagnostics) const;
+	class DiagnosticsTarget;
+	VeEvaluation evaluateRawVe(const AirmassInputs& inputs, float load, RawAirmassDiagnostics* diagnostics) const;
+	VeEvaluation evaluateVe(const AirmassInputs& inputs, float load, const DiagnosticsTarget& diagnostics) const;
 	virtual float getDedicatedVeImpl(float rpm, float load) const;
 
 	// Legacy wrappers select live delivery. Public evaluations only select optional
@@ -167,8 +199,13 @@ protected:
 		void blend(size_t index, const BlendResult& result) const;
 		void ve(const VeEvaluation& result, float load, float idleLoad) const;
 		void map(const MapEvaluation& result) const;
+		void temperature(const AirmassInputs& inputs) const;
+		void pressure(const AirmassInputs& inputs, float coefficient, bool multiplyMap) const;
+		bool consumers(const AirmassInputs& inputs, mass_t mass) const;
+		VeCorrectionEvaluation corrections(const AirmassInputs& inputs) const;
 
 	private:
+		AirmassDiagnostics* m_airmass = nullptr;
 		VeDiagnostics* m_ve = nullptr;
 		MapEvaluation* m_map = nullptr;
 		bool m_postState = false;
@@ -178,4 +215,5 @@ protected:
 
 private:
 	const ValueProvider3D* const m_veTable;
+	const engine_load_mode_e m_model;
 };

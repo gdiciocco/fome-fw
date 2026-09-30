@@ -31,6 +31,8 @@ public:
 	void rejectCalculation(AirmassInjectionFault fault);
 	void completeCalculation(CalculationToken token, bool publicationValid);
 	bool isCalculationCurrent(CalculationToken token);
+	// Read-only capture for model evaluation; does not observe or change modes.
+	CalculationToken publicationEpoch() const;
 	void onEngineStop();
 	void onConfigurationWrite(engine_load_mode_e proposedMode, bool strategyChanged);
 
@@ -61,6 +63,9 @@ private:
 	bool m_observedMode = false;
 	bool m_calculationAccepted = false;
 	bool m_positiveRpmCalculation = false;
+	// Standalone physical models recover on their next valid publication. Keep
+	// this separate from the composite fault latch and from priming admission.
+	bool m_standaloneReady = false;
 };
 
 // All events must use callbacks which acknowledge completion exactly once.
