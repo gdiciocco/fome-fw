@@ -84,7 +84,7 @@ void mainTriggerCallback(uint32_t trgEventIndex, const EnginePhaseInfo& phase) {
 			// trigger shape & optimization?) see updateTriggerWaveform() -> prepareOutputSignals()
 
 			// we need this to apply new 'triggerIndexByAngle' values
-			engine->periodicFastCallback();
+			engine->prepareForTrigger();
 		}
 	}
 

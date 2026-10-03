@@ -1898,9 +1898,9 @@ begin_table
 	table_values uint8_t airmassBlendTable;Alpha-N contribution to calculated air mass. 0 percent uses SD only. 100 percent uses Alpha-N only. Default fueling load remains effective MAP at every weight.;"% Alpha-N", 1, 0, 0, 100, 0
 end_table
 
-	! Retired readiness flags retain their reserved storage; calibration is checked automatically.
-	bit unusedSdAirmassMapReady
-	bit unusedAlphaNAirmassMapReady
+	! Reserved policy bits. Calibration validity is checked automatically.
+	bit unusedAirmassPolicy0
+	bit unusedAirmassPolicy1
 	bit useMapEstimateTable;Allow the calibrated MAP estimate table for fallback and, when enabled separately, transients.
 	bit alphaNMultiplyMap;Standalone Alpha-N only: multiply reference filling by effective MAP / 101.325. Ignored in blending.
 	bit alphaNBaroCompensation;Apply measured or valid startup BARO / reference pressure to pure Alpha-N before blending. Inactive with standalone Multiply MAP.

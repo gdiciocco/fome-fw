@@ -65,6 +65,107 @@ bool isMapEstimateConfigurationValid() {
 	return true;
 }
 
+namespace {
+bool scanCalibration(AirmassCalibration calibration) {
+	switch (calibration) {
+		case AirmassCalibration::SpeedDensity:
+			return isAirmassModelConfigurationValid(LM_SPEED_DENSITY);
+		case AirmassCalibration::AlphaN:
+			return isAirmassModelConfigurationValid(LM_ALPHA_N);
+		case AirmassCalibration::Maf:
+			return isAirmassModelConfigurationValid(LM_REAL_MAF);
+		case AirmassCalibration::MapEstimate:
+			return isMapEstimateConfigurationValid();
+		case AirmassCalibration::Authority:
+			if (!isAxisValid(config->airmassBlendTpsBins, 100) || !isAxisValid(config->airmassBlendRpmBins, 18000)) {
+				return false;
+			}
+			for (const auto& row : config->airmassBlendTable) {
+				for (auto value : row) {
+					if (value > 100) {
+						return false;
+					}
+				}
+			}
+			return true;
+		case AirmassCalibration::Idle:
+			return isAxisValid(config->idleVeLoadBins, 1000) && isAxisValid(config->idleVeRpmBins, 18000);
+		default: {
+			const auto index =
+					static_cast<uint8_t>(calibration) - static_cast<uint8_t>(AirmassCalibration::Correction0);
+			if (index >= VE_BLEND_COUNT) {
+				return false;
+			}
+			const auto& cfg = config->veBlends[index];
+			return isAxisValid(cfg.loadBins, 1000) && isAxisValid(cfg.rpmBins, 18000) &&
+				   isAxisValid(cfg.blendBins, 1000, -1000);
+		}
+	}
+}
+} // namespace
+
+void invalidateAirmassCalibration() {
+	chibios_rt::CriticalSectionLocker csl;
+	auto& cache = engine->airmassCalibration;
+	++cache.Generation;
+	cache.Known = 0;
+}
+
+bool isCapturedAirmassCalibrationValid(const AirmassInputs& inputs, AirmassCalibration calibration) {
+	if (!inputs.LiveCalibration) {
+		return scanCalibration(calibration);
+	}
+	const uint32_t bit = 1u << static_cast<uint8_t>(calibration);
+	{
+		chibios_rt::CriticalSectionLocker csl;
+		auto& cache = engine->airmassCalibration;
+		if (inputs.CalibrationGeneration != cache.Generation ||
+			inputs.ConfigurationVersion != engine->getGlobalConfigurationVersion()) {
+			return false;
+		}
+		if (cache.ConfigurationVersion != inputs.ConfigurationVersion) {
+			cache.Known = 0;
+			cache.ConfigurationVersion = inputs.ConfigurationVersion;
+		}
+		if (cache.Known & bit) {
+			return cache.Valid & bit;
+		}
+	}
+	// Do not mask interrupts for a full table scan. A writer invalidates before
+	// mutation under its lock; mixed or obsolete scans cannot enter the cache.
+	const bool valid = scanCalibration(calibration);
+#if EFI_UNIT_TEST
+	if (engine->onAirmassCalibrationScanned) {
+		engine->onAirmassCalibrationScanned();
+	}
+#endif
+	chibios_rt::CriticalSectionLocker csl;
+	auto& cache = engine->airmassCalibration;
+	if (inputs.CalibrationGeneration != cache.Generation ||
+		inputs.ConfigurationVersion != engine->getGlobalConfigurationVersion()) {
+		return false;
+	}
+#if EFI_UNIT_TEST
+	++cache.Scans;
+#endif
+	cache.Valid = (cache.Valid & ~bit) | (valid ? bit : 0);
+	cache.Known |= bit;
+	return valid;
+}
+
+bool isCapturedAirmassModelValid(const AirmassInputs& inputs, engine_load_mode_e model) {
+	switch (model) {
+		case LM_SPEED_DENSITY:
+			return isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::SpeedDensity);
+		case LM_ALPHA_N:
+			return isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::AlphaN);
+		case LM_REAL_MAF:
+			return isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::Maf);
+		default:
+			return true;
+	}
+}
+
 bool isRawAirmassConfigurationValid() {
 	// Model-specific axes are checked only when that branch contributes.
 	return std::isfinite(engineConfiguration->displacement) && engineConfiguration->displacement > 0 &&
@@ -90,7 +191,7 @@ VeEvaluation AirmassVeModelBase::evaluateVe(float rpm, float load, VeDiagnostics
 
 VeEvaluation AirmassVeModelBase::evaluateVe(float rpm, float load, const DiagnosticsTarget& diagnostics) const {
 	AirmassInputs inputs;
-	captureAirmassInputs(rpm, inputs);
+	captureAirmassInputs(rpm, inputs, nullptr, true, diagnostics.live());
 	inputs.NativeLoad = load;
 	inputs.Model = m_model;
 	return evaluateVe(inputs, load, diagnostics);
@@ -99,7 +200,7 @@ VeEvaluation AirmassVeModelBase::evaluateVe(float rpm, float load, const Diagnos
 VeEvaluation
 AirmassVeModelBase::evaluateVe(const AirmassInputs& inputs, float load, const DiagnosticsTarget& diagnostics) const {
 	RawAirmassDiagnostics raw;
-	auto evaluation = evaluateRawVe(inputs, load, &raw);
+	auto evaluation = evaluateRawVe(inputs, load, &raw, diagnostics.live());
 	if (!raw.HasValue) {
 		return evaluation;
 	}
@@ -107,6 +208,7 @@ AirmassVeModelBase::evaluateVe(const AirmassInputs& inputs, float load, const Di
 	// selected. Composite corrections run once after the two masses are blended.
 	const auto corrections = diagnostics.corrections(inputs);
 	evaluation.Ve *= corrections.Multiplier;
+	evaluation.Fallback = evaluation.Fallback || corrections.Fallback;
 	evaluation.Valid = evaluation.Valid && corrections.Valid && std::isfinite(evaluation.Ve) && evaluation.Ve >= 0;
 	diagnostics.ve(evaluation, load, raw.IdleLoad);
 	return evaluation;
@@ -151,6 +253,7 @@ AirmassVeModelBase::DiagnosticsTarget::DiagnosticsTarget(AirmassDiagnostics* dia
 	if (diagnostics) {
 		m_airmass = diagnostics;
 		diagnostics->TemperatureValid = false;
+		diagnostics->TemperatureFallback = false;
 		diagnostics->BaroCoefficient = 1;
 		diagnostics->PressureFlags = 0;
 		m_map = &diagnostics->Map;
@@ -210,6 +313,7 @@ void AirmassVeModelBase::DiagnosticsTarget::temperature(const AirmassInputs& inp
 	if (m_airmass) {
 		m_airmass->TemperatureK = inputs.TemperatureK;
 		m_airmass->TemperatureValid = inputs.TemperatureValid;
+		m_airmass->TemperatureFallback = inputs.TemperatureFallback;
 		m_airmass->TemperatureSource = inputs.TemperatureSource;
 	}
 	if (m_postState) {
@@ -265,15 +369,18 @@ float AirmassVeModelBase::getDedicatedVeImpl(float rpm, float load) const {
 	return getVeImpl(rpm, load);
 }
 
-VeEvaluation
-AirmassVeModelBase::evaluateRawVe(const AirmassInputs& inputs, float load, RawAirmassDiagnostics* diagnostics) const {
-	if (!isAirmassModelConfigurationValid(m_model) || !std::isfinite(inputs.Rpm) || !std::isfinite(load)) {
+VeEvaluation AirmassVeModelBase::evaluateRawVe(
+		const AirmassInputs& inputs, float load, RawAirmassDiagnostics* diagnostics, bool liveCalibration) const {
+	if (!(liveCalibration ? isCapturedAirmassModelValid(inputs, m_model) : isAirmassModelConfigurationValid(m_model)) ||
+		!std::isfinite(inputs.Rpm) || !std::isfinite(load)) {
 		return {};
 	}
 	float value = m_veTable ? m_veTable->getValue(inputs.Rpm, load) : getDedicatedVeImpl(inputs.Rpm, load);
 	bool valid = std::isfinite(value) && value >= 0;
 	float idleLoad = load;
 	float idleWeight = 0;
+	bool idleFallback = inputs.Composite && inputs.IdleActive && engineConfiguration->useSeparateVeForIdle &&
+						config->idleVeModel != IdleVeModel::SpeedDensity && config->idleVeModel != IdleVeModel::AlphaN;
 	const bool ownsIdle = !inputs.Composite ||
 						  (m_model == LM_SPEED_DENSITY && config->idleVeModel == IdleVeModel::SpeedDensity) ||
 						  (m_model == LM_ALPHA_N && config->idleVeModel == IdleVeModel::AlphaN);
@@ -281,7 +388,7 @@ AirmassVeModelBase::evaluateRawVe(const AirmassInputs& inputs, float load, RawAi
 		const float threshold = engineConfiguration->idlePidDeactivationTpsThreshold;
 		if (!inputs.DriverThrottleIntent || !std::isfinite(inputs.DriverThrottleIntent.Value) ||
 			!std::isfinite(threshold) || threshold <= 0) {
-			valid = false;
+			idleFallback = true;
 		} else {
 			idleWeight = interpolateClamped(threshold / 2, 1, threshold, 0, inputs.DriverThrottleIntent.Value);
 			// At zero weight the idle calibration and its input are not dependencies.
@@ -306,19 +413,29 @@ AirmassVeModelBase::evaluateRawVe(const AirmassInputs& inputs, float load, RawAi
 						break;
 				}
 				idleLoad = source.Value;
-				valid = valid && source.Valid && isAxisValid(config->idleVeLoadBins, 1000) &&
-						isAxisValid(config->idleVeRpmBins, 18000);
-				if (valid) {
+				const bool idleValid =
+						source.Valid &&
+						(liveCalibration ? isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::Idle)
+										 : scanCalibration(AirmassCalibration::Idle));
+				idleFallback = !idleValid;
+				if (valid && idleValid) {
 					const float idle = interpolate3d(
 							config->idleVeTable, config->idleVeLoadBins, idleLoad, config->idleVeRpmBins, inputs.Rpm);
-					valid = std::isfinite(idle) && idle >= 0;
-					value += idleWeight * (idle - value);
+					idleFallback = !std::isfinite(idle) || idle < 0;
+					if (!idleFallback) {
+						value += idleWeight * (idle - value);
+					}
 				}
 			}
 		}
 	}
-	VeEvaluation evaluation{value, valid && std::isfinite(value) && value >= 0};
+	if (idleFallback) {
+		idleWeight = 0;
+		idleLoad = load;
+	}
+	VeEvaluation evaluation{value, valid && std::isfinite(value) && value >= 0, idleFallback};
 	if (diagnostics) {
+		diagnostics->IdleFallback = idleFallback;
 		diagnostics->TableValue = value;
 		diagnostics->IdleLoad = idleLoad;
 		diagnostics->IdleWeight = idleWeight;
@@ -326,6 +443,18 @@ AirmassVeModelBase::evaluateRawVe(const AirmassInputs& inputs, float load, RawAi
 		diagnostics->Valid = evaluation.Valid;
 	}
 	return evaluation;
+}
+
+static AirmassLoad resolveFilling(const AirmassInputs& inputs, mass_t mass, float standardCharge) {
+	AirmassLoad result;
+	result.Source = AirmassLoadSource::CylinderFilling;
+	if (!std::isfinite(mass) || mass < 0 || !std::isfinite(inputs.Displacement) || inputs.Displacement <= 0 ||
+		!std::isfinite(inputs.CylinderCount) || inputs.CylinderCount <= 0) {
+		return result;
+	}
+	result.Value = 100 * mass / standardCharge;
+	result.Valid = std::isfinite(result.Value) && result.Value >= 0;
+	return result;
 }
 
 AirmassLoad resolveAirmassLoad(const AirmassInputs& inputs, mass_t finalMass, load_override_e selector) {
@@ -347,8 +476,12 @@ AirmassLoad resolveAirmassLoad(const AirmassInputs& inputs, mass_t finalMass, lo
 								   inputs.EffectiveMap.Map <= 1000;
 					result.UsesEstimate = inputs.EffectiveMap.UsesEstimate;
 				} else if (inputs.Model == LM_ALPHA_N) {
-					result.Valid = result.Valid && inputs.Tps && std::isfinite(inputs.Tps.Value) &&
-								   inputs.Tps.Value >= 0 && inputs.Tps.Value <= 100 && result.Value <= 100;
+					const auto sensorTps = normalizeAirmassPercent(inputs, inputs.Tps);
+					const auto tps = normalizeAirmassPercent(inputs, expected<float>(result.Value));
+					result.Valid = sensorTps && tps;
+					if (tps) {
+						result.Value = tps.Value;
+					}
 				}
 				return result;
 			}
@@ -368,30 +501,74 @@ AirmassLoad resolveAirmassLoad(const AirmassInputs& inputs, mass_t finalMass, lo
 			maximum = 1000;
 			break;
 		case AFR_Tps:
-			sensor = inputs.Tps;
+			sensor = normalizeAirmassPercent(inputs, inputs.Tps);
 			result.Source = AirmassLoadSource::Tps;
 			break;
 		case AFR_AccPedal:
-			sensor = inputs.Pedal;
+			sensor = normalizeAirmassPercent(inputs, inputs.Pedal);
 			result.Source = AirmassLoadSource::Pedal;
 			break;
-		case AFR_CylFilling: {
-			result.Source = AirmassLoadSource::CylinderFilling;
-			if (!std::isfinite(finalMass) || finalMass < 0 || !std::isfinite(inputs.Displacement) ||
-				inputs.Displacement <= 0 || !std::isfinite(inputs.CylinderCount) || inputs.CylinderCount <= 0) {
-				return result;
-			}
-			const float standardCharge = idealGasLaw(inputs.Displacement / inputs.CylinderCount, 101.325f, 293.15f);
-			result.Value = 100 * finalMass / standardCharge;
-			result.Valid = std::isfinite(result.Value) && result.Value >= 0;
-			return result;
-		}
+		case AFR_CylFilling:
+			return resolveFilling(
+					inputs, finalMass, idealGasLaw(inputs.Displacement / inputs.CylinderCount, 101.325f, 293.15f));
 		default:
 			return result;
 	}
 	result.Value = sensor.value_or(0);
 	result.Valid = sensor.Valid && std::isfinite(result.Value) && result.Value >= 0 && result.Value <= maximum;
 	return result;
+}
+
+expected<float> normalizeAirmassPercent(const AirmassInputs& inputs, expected<float> sensor) {
+	if (!sensor || !std::isfinite(sensor.Value)) {
+		return unexpected;
+	}
+	if (!std::isfinite(inputs.TpsToleranceMin) || !std::isfinite(inputs.TpsToleranceMax) ||
+		inputs.TpsToleranceMin > inputs.TpsToleranceMax || sensor.Value < inputs.TpsToleranceMin ||
+		sensor.Value > inputs.TpsToleranceMax) {
+		return unexpected;
+	}
+	return clampF(0, sensor.Value, 100);
+}
+
+static AirmassLoad consumerLoad(AirmassLoad result, bool massValid) {
+	if (result.Valid || !massValid) {
+		return result;
+	}
+	switch (result.Source) {
+		case AirmassLoadSource::EffectiveMap:
+		case AirmassLoadSource::MeasuredMap:
+			result.Value = 200;
+			break;
+		case AirmassLoadSource::Tps:
+		case AirmassLoadSource::Pedal:
+			result.Value = 100;
+			break;
+		default:
+			return result;
+	}
+	result.Valid = true;
+	result.UsesEstimate = false;
+	return result;
+}
+
+AirmassLoad resolveAirmassConsumerLoad(const AirmassInputs& inputs, mass_t finalMass, load_override_e selector) {
+	return consumerLoad(resolveAirmassLoad(inputs, finalMass, selector), std::isfinite(finalMass) && finalMass >= 0);
+}
+
+AirmassResolvedLoads::AirmassResolvedLoads(const AirmassInputs& inputs, mass_t finalMass)
+	: m_massValid(std::isfinite(finalMass) && finalMass >= 0) {
+	for (uint8_t source = 0; source <= AFR_EffectiveMAP; source++) {
+		m_loads[source] = inputs.LiveCalibration && source == AFR_CylFilling
+								? resolveFilling(inputs, finalMass, inputs.StandardAirCharge)
+								: resolveAirmassLoad(inputs, finalMass, static_cast<load_override_e>(source));
+	}
+}
+AirmassLoad AirmassResolvedLoads::strict(load_override_e source) const {
+	return source <= AFR_EffectiveMAP ? m_loads[source] : AirmassLoad{};
+}
+AirmassLoad AirmassResolvedLoads::consumer(load_override_e source) const {
+	return consumerLoad(strict(source), m_massValid);
 }
 
 namespace {
@@ -416,7 +593,7 @@ public:
 			case GPPWM_Rpm:
 				return m_inputs.Rpm;
 			case GPPWM_Tps:
-				return boundedInput(m_inputs.Tps, 100);
+				return normalizeAirmassPercent(m_inputs, m_inputs.Tps);
 			case GPPWM_EffectiveMap:
 				return m_inputs.EffectiveMap.Valid ? boundedInput(m_inputs.EffectiveMap.Map, 1000)
 												   : expected<float>(unexpected);
@@ -427,7 +604,7 @@ public:
 			case GPPWM_Iat:
 				return m_inputs.Iat;
 			case GPPWM_AccelPedal:
-				return boundedInput(m_inputs.Pedal, 100);
+				return normalizeAirmassPercent(m_inputs, m_inputs.Pedal);
 			case GPPWM_FuelLoad:
 				return m_inputs.PreviousFuelingLoad;
 			case GPPWM_IgnLoad:
@@ -463,6 +640,7 @@ static VeCorrectionEvaluation evaluateAirmassCorrectionsImpl(
 	if (diagnostics) {
 		diagnostics->HasValue = false;
 		diagnostics->Valid = false;
+		diagnostics->Fallback = false;
 	}
 	VeCorrectionEvaluation evaluation{1, true};
 	CorrectionChannels channels(inputs);
@@ -476,15 +654,27 @@ static VeCorrectionEvaluation evaluateAirmassCorrectionsImpl(
 							  ? (native.Valid ? expected<float>(native.Value) : expected<float>(unexpected))
 							  : channels.read(cfg.yAxisOverride);
 			if (!parameter || !load || !std::isfinite(parameter.Value) || !std::isfinite(load.Value) ||
-				!std::isfinite(inputs.Rpm) || inputs.Rpm <= 0 || !isAxisValid(cfg.loadBins, 1000) ||
-				!isAxisValid(cfg.rpmBins, 18000) || !isAxisValid(cfg.blendBins, 1000, -1000)) {
-				evaluation.Valid = false;
+				!std::isfinite(inputs.Rpm) || inputs.Rpm <= 0 ||
+				!(postState && inputs.LiveCalibration
+						  ? isCapturedAirmassCalibrationValid(
+									inputs,
+									static_cast<AirmassCalibration>(
+											static_cast<uint8_t>(AirmassCalibration::Correction0) + i))
+						  : scanCalibration(
+									static_cast<AirmassCalibration>(
+											static_cast<uint8_t>(AirmassCalibration::Correction0) + i)))) {
+				evaluation.Fallback = true;
 			} else {
 				result = calculateBlend(cfg, inputs.Rpm, load.Value, parameter.Value);
 				const float factor = applyVeCorrection(1, result.Value);
-				evaluation.Valid =
-						evaluation.Valid && std::isfinite(result.Value) && std::isfinite(factor) && factor >= 0;
-				evaluation.Multiplier = applyVeCorrection(evaluation.Multiplier, result.Value);
+				const float corrected = applyVeCorrection(evaluation.Multiplier, result.Value);
+				if (std::isfinite(result.Value) && std::isfinite(factor) && factor >= 0 && std::isfinite(corrected) &&
+					corrected >= 0) {
+					evaluation.Multiplier = corrected;
+				} else {
+					evaluation.Fallback = true;
+					result = {};
+				}
 			}
 		}
 		if (diagnostics) {
@@ -501,6 +691,7 @@ static VeCorrectionEvaluation evaluateAirmassCorrectionsImpl(
 	if (diagnostics) {
 		diagnostics->HasValue = true;
 		diagnostics->Valid = evaluation.Valid;
+		diagnostics->Fallback = evaluation.Fallback;
 	}
 	return evaluation;
 }

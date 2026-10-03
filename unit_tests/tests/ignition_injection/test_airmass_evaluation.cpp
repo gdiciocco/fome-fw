@@ -199,28 +199,33 @@ TEST(AirmassEvaluation, AlphaNCaptureMatchesNoCaptureAndResetsOnFailure) {
 	expectSeededDiagnostics();
 }
 
-TEST(AirmassEvaluation, InvalidSpeedDensityTemperaturePublishesOnlyMapSnapshot) {
+TEST(AirmassEvaluation, InvalidSpeedDensityTemperatureUsesIatThenStandardTemperature) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engine->engineState.sd.tChargeK = 293.15f;
-	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
+	engine->engineState.sd.tChargeK = NAN;
 	Sensor::setMockValue(SensorType::Tps1, 24);
 	Sensor::setMockValue(SensorType::Map, 46);
-
+	Sensor::setMockValue(SensorType::Iat, 30);
 	StrictMock<MockVp3d> veTable;
 	StrictMock<MockVp3d> mapEstimate;
+	EXPECT_CALL(veTable, getValue(2100, 46)).Times(3).WillRepeatedly(Return(58));
 	SpeedDensityAirmass dut(&veTable, mapEstimate);
-	seedPublishedDiagnostics();
-
-	auto result = dut.getAirmass(2100, true);
-	EXPECT_FLOAT_EQ(result.CylinderAirmass, 0);
-	EXPECT_FLOAT_EQ(result.EngineLoadPercent, 100);
-	EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.fallbackMap), 94);
-	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 91);
-	EXPECT_FLOAT_EQ(engine->engineState.veTableYAxis, 92);
-	EXPECT_FLOAT_EQ(engine->engineState.idleVeTableYAxis, 93);
-	for (size_t i = 0; i < VE_BLEND_COUNT; i++) {
-		EXPECT_FLOAT_EQ(static_cast<float>(engine->outputChannels.veBlendOutput[i]), 30 + i);
-	}
+	AirmassDiagnostics diagnostics;
+	auto result = dut.evaluateAirmass(2100, &diagnostics);
+	ASSERT_TRUE(result.Valid);
+	EXPECT_TRUE(result.Degraded);
+	EXPECT_FLOAT_EQ(diagnostics.TemperatureK, 303.15f);
+	EXPECT_TRUE(diagnostics.TemperatureFallback);
+	Sensor::setInvalidMockValue(SensorType::Iat);
+	result = dut.evaluateAirmass(2100, &diagnostics);
+	ASSERT_TRUE(result.Valid);
+	EXPECT_TRUE(result.Degraded);
+	EXPECT_FLOAT_EQ(diagnostics.TemperatureK, 293.15f);
+	engine->engineState.sd.tChargeK = 310;
+	result = dut.evaluateAirmass(2100, &diagnostics);
+	ASSERT_TRUE(result.Valid);
+	EXPECT_FALSE(result.Degraded);
+	EXPECT_FALSE(diagnostics.TemperatureFallback);
+	EXPECT_FLOAT_EQ(diagnostics.TemperatureK, 310);
 }
 
 TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailure) {
@@ -251,7 +256,7 @@ TEST(AirmassEvaluation, SpeedDensityCaptureMatchesNoCaptureAndResetsOnEarlyFailu
 	EXPECT_TRUE(diagnostics.Map.Valid);
 	EXPECT_FLOAT_EQ(diagnostics.Map.FallbackMap, 0);
 
-	engine->engineState.sd.tChargeK = std::numeric_limits<float>::quiet_NaN();
+	config->airmassTemperatureSource = static_cast<AirmassTemperatureSource>(255);
 	auto failedWithoutCapture = dut.evaluateAirmass(2100);
 	EXPECT_TRUE(diagnostics.Ve.HasValue);
 	auto failedWithCapture = dut.evaluateAirmass(2100, &diagnostics);
@@ -281,8 +286,17 @@ TEST(AirmassEvaluation, MapSnapshotTracksTransientEstimateValidity) {
 	EXPECT_TRUE(validEstimate.UsesEstimate);
 	EXPECT_FLOAT_EQ(validEstimate.Map, 75);
 	Sensor::setInvalidMockValue(SensorType::Tps1);
-	// Comparison requires a valid TPS even if measured MAP might win.
-	EXPECT_FALSE(dut.evaluateMap(3000).Valid);
+	EXPECT_CALL(mapEstimate, getValue(3000, 0)).WillOnce(Return(75));
+	const auto missingTps = dut.evaluateMap(3000);
+	EXPECT_TRUE(missingTps.Valid);
+	EXPECT_TRUE(missingTps.Fallback);
+	EXPECT_FLOAT_EQ(missingTps.Map, 75);
+	EXPECT_CALL(mapEstimate, getValue(3000, 0)).WillOnce(Return(NAN));
+	const auto brokenEstimate = dut.evaluateMap(3000);
+	EXPECT_TRUE(brokenEstimate.Valid);
+	EXPECT_TRUE(brokenEstimate.Fallback);
+	EXPECT_FALSE(brokenEstimate.UsesEstimate);
+	EXPECT_FLOAT_EQ(brokenEstimate.Map, 40);
 	engineConfiguration->useMapEstimateDuringTransient = false;
 	EXPECT_TRUE(dut.evaluateMap(3000).Valid);
 }

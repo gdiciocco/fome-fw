@@ -177,7 +177,11 @@ static void clearUnusedLambdaDiagnostics() {
 static float getBlendedBaseFuelMass(float rpm) {
 	engine->outputChannels.blendedLambdaLoad = 0;
 	engine->fuelComputer.resetResolvedLambdaLoad();
+	const auto calculationToken = engine->airmassInjectionState.publicationEpoch();
 	const auto evaluation = blendedAirmass.getAirmassForFuel(rpm);
+	if (!engine->airmassInjectionState.isCalculationCurrent(calculationToken)) {
+		return 0;
+	}
 	if (!evaluation.Airmass.Valid) {
 		engine->fuelComputer.sdAirMassInOneCylinder = 0;
 		engine->fuelComputer.normalizedCylinderFilling = 0;
@@ -188,22 +192,25 @@ static float getBlendedBaseFuelMass(float rpm) {
 		engine->engineState.ignitionLoad = 0;
 		engine->engineState.airflowEstimate = 0;
 		engine->engineState.baseFuel = 0;
-		engine->engineState.airmassLoads.Valid = false;
+		invalidateAirmassConsumerLoads();
 		engine->airmassInjectionState.rejectCalculation(evaluation.Fault);
 		return 0;
 	}
 	const auto& airmass = evaluation.Airmass.Result;
 	engine->fuelComputer.sdAirMassInOneCylinder = airmass.CylinderAirmass;
 	engine->fuelComputer.normalizedCylinderFilling = evaluation.NormalizedFilling;
-	engine->engineState.fuelingLoad = airmass.EngineLoadPercent;
-	engine->engineState.ignitionLoad = evaluation.IgnitionLoad.Valid ? evaluation.IgnitionLoad.Value : 0;
+	engine->engineState.fuelingLoad = getAirmassSelectedLoad(AFR_None, airmass.EngineLoadPercent);
+	const float lambdaLoad = engine->fuelComputer.getTargetLambdaLoadAxis(airmass.EngineLoadPercent);
+	engine->engineState.ignitionLoad = engineConfiguration->isIgnitionEnabled
+											 ? engine->fuelComputer.getLoadOverride(
+													   airmass.EngineLoadPercent, engineConfiguration->ignOverrideMode)
+											 : 0;
 	const float gramsPerCycle = airmass.CylinderAirmass * engine->engineState.cylinderCount;
 	engine->engineState.airflowEstimate = gramsPerCycle / getEngineCycleDuration(rpm) * 3600000 / 1000;
 	float baseFuelMass = 0;
 	const bool lambdaRequired = isAirmassLambdaTargetRequired();
 	if (lambdaRequired) {
-		baseFuelMass = engine->fuelComputer.getCycleFuelWithResolvedLoad(
-				airmass.CylinderAirmass, rpm, evaluation.LambdaLoad.Value);
+		baseFuelMass = engine->fuelComputer.getCycleFuelWithResolvedLoad(airmass.CylinderAirmass, rpm, lambdaLoad);
 		if (!std::isfinite(baseFuelMass) || baseFuelMass < 0) {
 			engine->engineState.baseFuel = 0;
 			engine->fuelComputer.resetResolvedLambdaLoad();
@@ -227,12 +234,15 @@ static float getBlendedBaseFuelMass(float rpm) {
 		engine->fuelComputer.running.baseFuel = 0;
 		engine->fuelComputer.running.fuel = 0;
 	}
-	engine->outputChannels.blendedLambdaLoad = lambdaRequired ? evaluation.LambdaLoad.Value : 0;
+	engine->outputChannels.blendedLambdaLoad = lambdaRequired ? lambdaLoad : 0;
 	engine->engineState.baseFuel = baseFuelMass;
 	// engine2 still owns the final readiness transition after all per-cylinder
 	// fuel quantities and durations have been checked and published.
 	engine->engineState.airmassCalculationValid = true;
-	engine->airmassInjectionState.acceptCalculation();
+	engine->airmassInjectionState.acceptCalculation(
+			evaluation.Degraded		   ? evaluation.Fault
+			: hasAirmassLoadFallback() ? AirmassInjectionFault::Load
+									   : AirmassInjectionFault::None);
 	return baseFuelMass;
 }
 
@@ -251,14 +261,15 @@ static float getBaseFuelMass(float rpm) {
 	const auto calculationToken = engine->airmassInjectionState.publicationEpoch();
 	const auto rejectStandalone = [revisedStandalone, calculationToken](AirmassInjectionFault fault) {
 		chibios_rt::CriticalSectionLocker csl;
-		if (revisedStandalone && engine->airmassInjectionState.isCalculationCurrent(calculationToken)) {
+		auto admission = engine->airmassInjectionState.locked(csl);
+		if (revisedStandalone && admission.isCalculationCurrent(calculationToken)) {
 			// Retaining completed fuel during evaluation must not retain it after
 			// an input/result has actually failed. A stale evaluation cannot close
 			// admission for a newer completed publication.
-			engine->airmassInjectionState.rejectCalculation(fault);
+			admission.rejectCalculation(fault);
 		}
 	};
-	if (!validateAirmassConfiguration()) {
+	if (!revisedStandalone && !isAirmassConfigurationValid()) {
 		rejectStandalone(AirmassInjectionFault::Configuration);
 		return 0;
 	}
@@ -273,9 +284,15 @@ static float getBaseFuelMass(float rpm) {
 									  ? sdAirmass.getAirmassForFuel(rpm)
 							  : engineConfiguration->fuelAlgorithm == LM_ALPHA_N ? alphaNAirmass.getAirmassForFuel(rpm)
 																				 : mafAirmass.getAirmassForFuel(rpm);
+		if (!engine->airmassInjectionState.isCalculationCurrent(calculationToken)) {
+			return 0;
+		}
 		if (!evaluation.Valid) {
-			rejectStandalone(AirmassInjectionFault::Result);
-			engine->engineState.airmassLoads.Valid = false;
+			rejectStandalone(
+					isAirmassModelConfigurationValid(engineConfiguration->fuelAlgorithm)
+							? AirmassInjectionFault::Result
+							: AirmassInjectionFault::Configuration);
+			invalidateAirmassConsumerLoads();
 			engine->engineState.fuelingLoad = 0;
 			engine->engineState.ignitionLoad = 0;
 			engine->fuelComputer.sdAirMassInOneCylinder = 0;
@@ -284,17 +301,24 @@ static float getBaseFuelMass(float rpm) {
 			return 0;
 		}
 		airmass = evaluation.Result;
+		engine->airmassInjectionState.acceptCalculation(
+				evaluation.Degraded		   ? AirmassInjectionFault::Sensor
+				: hasAirmassLoadFallback() ? AirmassInjectionFault::Load
+										   : AirmassInjectionFault::None);
 	} else {
 		airmass = model->getAirmass(rpm, true);
 	}
 
 	// Plop some state for others to read
-	float normalizedCylinderFilling = 100 * airmass.CylinderAirmass / getStandardAirCharge();
+	float normalizedCylinderFilling = revisedStandalone ? getAirmassSelectedLoad(AFR_CylFilling, NAN)
+														: 100 * airmass.CylinderAirmass / getStandardAirCharge();
 	engine->fuelComputer.sdAirMassInOneCylinder = airmass.CylinderAirmass;
 	engine->fuelComputer.normalizedCylinderFilling = normalizedCylinderFilling;
-	engine->engineState.fuelingLoad = airmass.EngineLoadPercent;
-	const float ignitionLoad =
-			engine->fuelComputer.getLoadOverride(airmass.EngineLoadPercent, engineConfiguration->ignOverrideMode);
+	engine->engineState.fuelingLoad = getAirmassSelectedLoad(AFR_None, airmass.EngineLoadPercent);
+	const float ignitionLoad = engineConfiguration->isIgnitionEnabled
+									 ? engine->fuelComputer.getLoadOverride(
+											   airmass.EngineLoadPercent, engineConfiguration->ignOverrideMode)
+									 : 0;
 	engine->engineState.ignitionLoad = std::isfinite(ignitionLoad) ? ignitionLoad : 0;
 
 	auto gramPerCycle = airmass.CylinderAirmass * engine->engineState.cylinderCount;
@@ -549,18 +573,18 @@ float getCrankingFuel(float baseFuel) {
 	return getCrankingFuel3(baseFuel, engine->rpmCalculator.getRevolutionCounterSinceStart());
 }
 
-/**
- * Standard cylinder air charge - 100% VE at standard temperature, grams per cylinder
- *
- * Should we bother caching 'getStandardAirCharge' result or can we afford to run the math every time we calculate fuel?
- */
+// Cache by actual geometry, including direct edits without a burn version.
 float getStandardAirCharge() {
-	float totalDisplacement = engineConfiguration->displacement;
-	float cylDisplacement = totalDisplacement / engine->engineState.cylinderCount;
-
-	// Calculation of 100% VE air mass in g/cyl - 1 cylinder filling at 1.204/L
-	// 101.325kpa, 20C
-	return idealGasLaw(cylDisplacement, 101.325f, 273.15f + 20.0f);
+	chibios_rt::CriticalSectionLocker csl;
+	auto& cache = engine->airmassCalibration;
+	const float displacement = engineConfiguration->displacement;
+	const float cylinders = engine->engineState.cylinderCount;
+	if (cache.ChargeDisplacement != displacement || cache.ChargeCylinderCount != cylinders) {
+		cache.StandardCharge = idealGasLaw(displacement / cylinders, 101.325f, 293.15f);
+		cache.ChargeDisplacement = displacement;
+		cache.ChargeCylinderCount = cylinders;
+	}
+	return cache.StandardCharge;
 }
 
 float getCylinderFuelTrim(

@@ -1,5 +1,12 @@
 # SD + Alpha-N operation
 
+Historical operation record for the earlier `feature/blended-airmass` revision.
+Capoworks now uses `feature/blended-airmass-pr` through `6d51a9003e`, including
+automatic fault recovery and model fallbacks. For current operating instructions,
+see the [operator guide](../user/blended-airmass.md) and
+[architecture](airmass-architecture.md). The readiness and rearm procedures below
+apply only to the historical implementation.
+
 The [next revision requirements](blended-airmass-revision.md) change activation,
 names, MAP-estimate permission, consumer load selection and endpoint analysis.
 They are planned work. The operating instructions below describe the current

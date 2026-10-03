@@ -14,9 +14,18 @@ enum BlendedAirmassFlags : uint16_t {
 	BlendedMapEstimateUsed = 1 << 4,
 	BlendedCalculationValid = 1 << 5,
 	BlendedEstimateEvaluated = 1 << 6,
+	BlendedTemperatureFallback = 1 << 7,
+	BlendedBranchFallback = 1 << 8,
+	BlendedAuthorityUnavailable = 1 << 9,
+	BlendedBaroFallback = 1 << 10,
+	BlendedIdleFallback = 1 << 11,
+	BlendedCorrectionFallback = 1 << 12,
+	BlendedMapFallback = 1 << 13,
+	BlendedLoadFallback = 1 << 14,
 };
 
 struct BlendedAirmassEvaluation {
+	bool Degraded = false;
 	AirmassEvaluation Airmass;
 	AirmassLoad LambdaLoad;
 	AirmassLoad IgnitionLoad;
@@ -29,6 +38,7 @@ struct BlendedAirmassEvaluation {
 struct BlendedAirmassDiagnostics {
 	float TemperatureK = 0;
 	bool TemperatureValid = false;
+	bool TemperatureFallback = false;
 	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
 	float BaroCoefficient = 1;
 	uint8_t PressureFlags = 0;

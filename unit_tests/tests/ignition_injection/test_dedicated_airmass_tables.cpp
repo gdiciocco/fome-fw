@@ -57,7 +57,7 @@ void configureMafAxesForInterpolation() {
 }
 } // namespace
 
-TEST(DedicatedAirmassTables, DefaultsProvideThreeIndependentCalibrations) {
+TEST(DedicatedAirmassTables, M73AlphaNCalibrationUsesItsDedicatedTable) {
 	EngineTestHelper eth(engine_type_e::FRANKENSO_BMW_M73_F);
 	engine->engineState.sd.tChargeK = 293.15f;
 	Sensor::setMockValue(SensorType::Tps1, 25);
@@ -66,12 +66,12 @@ TEST(DedicatedAirmassTables, DefaultsProvideThreeIndependentCalibrations) {
 	EXPECT_EQ(ALPHA_N_RPM_COUNT, 16);
 	EXPECT_EQ(MAF_LOAD_COUNT, 16);
 	EXPECT_EQ(MAF_RPM_COUNT, 16);
-	EXPECT_FLOAT_EQ(config->veTable[0][0], 45);
+	EXPECT_FLOAT_EQ(config->alphaNTable[0][0], 45);
 	EXPECT_FLOAT_EQ(config->alphaNTpsBins[1], 0.5f);
 	EXPECT_FLOAT_EQ(config->mafLoadBins[MAF_LOAD_COUNT - 1], 200);
 	for (size_t load = 0; load < ALPHA_N_LOAD_COUNT; load++) {
 		for (size_t rpm = 0; rpm < ALPHA_N_RPM_COUNT; rpm++) {
-			EXPECT_FLOAT_EQ(config->alphaNTable[load][rpm], 80);
+			EXPECT_FLOAT_EQ(config->alphaNTable[load][rpm], 45);
 		}
 	}
 	for (size_t load = 0; load < MAF_LOAD_COUNT; load++) {
@@ -80,17 +80,17 @@ TEST(DedicatedAirmassTables, DefaultsProvideThreeIndependentCalibrations) {
 		}
 	}
 
-	AlphaNAirmass alphaN;
-	AirmassDiagnostics diagnostics;
-	auto evaluation = alphaN.evaluateAirmass(1800, &diagnostics);
+	// EngineTestHelper selects LM_MOCK after the preset callback, so restore the
+	// preset's algorithm before asking the model dispatcher for the active model.
+	engineConfiguration->fuelAlgorithm = LM_ALPHA_N;
+	const auto airmass = getAirmassModel(engineConfiguration->fuelAlgorithm)->getAirmass(1800, true);
 
-	EXPECT_TRUE(evaluation.Valid);
-	EXPECT_FLOAT_EQ(diagnostics.Ve.Ve, 80);
-	EXPECT_FLOAT_EQ(diagnostics.Ve.Load, 25);
+	EXPECT_FLOAT_EQ(engine->engineState.currentVe, 45);
+	EXPECT_FLOAT_EQ(airmass.EngineLoadPercent, 25);
 	EXPECT_NEAR(
-			evaluation.Result.CylinderAirmass,
+			airmass.CylinderAirmass,
 			expectedIdealGasMass(
-					engineConfiguration->displacement, engine->engineState.cylinderCount, 80, 101.325f, 293.15f),
+					engineConfiguration->displacement, engine->engineState.cylinderCount, 45, 101.325f, 293.15f),
 			EPS4D);
 }
 

@@ -346,7 +346,7 @@ struct_no_prefix output_channels_s
 	uint16_t autoscale blendedAlphaNVe;Air blend: Alpha-N filling;"%", 0.1, 0, 0, 0, 1
 	float blendedCorrection;Air blend: Common multiplier;"", 1, 0, 0, 0, 3
 	uint8_t blendedStatus;Air blend: Injection state;"code", 1, 0, 0, 0, 0
-	uint8_t blendedFault;Air blend: Latched fault;"code", 1, 0, 0, 0, 0
+	uint8_t blendedFault;Air blend: Current fault or fallback;"code", 1, 0, 0, 0, 0
 	uint16_t blendedFlags;Air blend: Calculation flags;"bits", 1, 0, 0, 0, 0
 	float blendedLambdaLoad;Air blend: Lambda load;"", 1, 0, 0, 0, 2
 	float airmassTemperature;Airmass: Temperature used;"C", 1, 0, 0, 0, 2

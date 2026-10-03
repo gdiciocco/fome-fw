@@ -3,6 +3,7 @@
 #include "rusefi_types.h"
 struct blend_table_s;
 #include "engine_math.h"
+#include "airmass_calibration.h"
 #include <rusefi/expected.h>
 
 class ValueProvider3D;
@@ -23,8 +24,9 @@ struct AirmassModelBase {
 
 struct VeEvaluation {
 	percent_t Ve = 0;
-	// Required table, idle and correction inputs are valid.
+	// Required table, idle and correction inputs are usable.
 	bool Valid = false;
+	bool Fallback = false;
 };
 
 // Optional caller-owned diagnostics contain values, never references to live state.
@@ -47,9 +49,10 @@ struct MapEvaluation {
 	bool HasValue = false; // A fallback MAP diagnostic was evaluated for publication.
 	bool Valid = false;
 	bool UsesEstimate = false;
+	bool Fallback = false;
 };
 
-// One capture for a future composite calculation. Sensor acquisition is sequential,
+// Shared inputs for a physical-model calculation. Sensor acquisition is sequential,
 // not atomic. Maps remain in configuration storage and must not be copied here.
 // Optional inputs retain their own validity: an unused input cannot fail a model.
 struct AirmassInputs {
@@ -59,14 +62,22 @@ struct AirmassInputs {
 	int ConfigurationVersion = 0;
 	engine_load_mode_e ActiveStrategy = LM_SPEED_DENSITY;
 	bool HasPublicationContext = false;
+	// Explicit live owner; capture alone never enables cached validation.
+	bool LiveCalibration = false;
+	uint32_t CalibrationGeneration = 0;
 	float Rpm = 0;
 	expected<float> MeasuredMap = unexpected;
 	expected<float> Tps = unexpected;
 	expected<float> Pedal = unexpected;
+	// Captured sensor error limits; default values match the standard sensor
+	// configuration for callers that construct a snapshot directly.
+	float TpsToleranceMin = -10;
+	float TpsToleranceMax = 110;
 	expected<float> Iat = unexpected;
 	MapEvaluation EffectiveMap;
 	float TemperatureK = 0;
 	bool TemperatureValid = false;
+	bool TemperatureFallback = false;
 	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
 	expected<float> BarometricPressure = unexpected;
 	expected<float> DriverThrottleIntent = unexpected;
@@ -77,13 +88,21 @@ struct AirmassInputs {
 	float NativeLoad = 0;
 	float Displacement = 0;
 	float CylinderCount = 0;
+	float StandardAirCharge = 0; // Captured with live geometry; pure APIs recompute.
 	float PreviousFuelingLoad = 0;
 	float PreviousIgnitionLoad = 0;
 	load_override_e LambdaOverride = AFR_None;
 	load_override_e IgnitionOverride = AFR_None;
 };
 
+// Convert a captured TPS-like sensor value into a table coordinate. The sensor
+// must be valid and within its configured error-detection bounds; tolerated
+// overtravel is then represented by the nearest 0..100% coordinate.
+expected<float> normalizeAirmassPercent(const AirmassInputs& inputs, expected<float> sensor);
+
 struct RawAirmassDiagnostics {
+	bool IdleFallback = false;
+	bool BaroFallback = false;
 	float TableValue = 0;
 	float IdleLoad = 0;
 	float IdleWeight = 0;
@@ -113,15 +132,34 @@ struct AirmassLoad {
 	bool UsesEstimate = false;
 };
 
+// Six physical coordinates resolved once for a final corrected mass. Strict
+// validity and source/unit metadata survive numeric consumer substitution.
+class AirmassResolvedLoads {
+public:
+	AirmassResolvedLoads(const AirmassInputs& inputs, mass_t finalMass);
+	AirmassLoad strict(load_override_e source) const;
+	AirmassLoad consumer(load_override_e source) const;
+
+private:
+	AirmassLoad m_loads[AFR_EffectiveMAP + 1];
+	bool m_massValid;
+};
+
+static_assert(sizeof(AirmassResolvedLoads) <= 52);
+
 // Pure resolution: never re-read sensors or apply legacy numeric failure fallbacks.
 AirmassLoad resolveAirmassLoad(const AirmassInputs& inputs, mass_t finalMass, load_override_e selector);
+// Upstream numeric substitutes for downstream tables; physical resolution stays strict.
+AirmassLoad resolveAirmassConsumerLoad(const AirmassInputs& inputs, mass_t finalMass, load_override_e selector);
 
 struct VeCorrectionEvaluation {
 	float Multiplier = 1;
 	bool Valid = false;
+	bool Fallback = false;
 };
 
 struct VeCorrectionDiagnostics {
+	bool Fallback = false;
 	BlendResult Blends[VE_BLEND_COUNT] = {};
 	bool HasValue = false;
 	bool Valid = false;
@@ -140,12 +178,23 @@ bool isMapEstimateAxesValid();
 bool isRawAirmassConfigurationValid();
 bool isAirmassModelConfigurationValid(engine_load_mode_e model);
 void captureAirmassInputs(
-		float rpm, AirmassInputs& inputs, const ValueProvider3D* estimate = nullptr, bool resolveMap = true);
+		float rpm,
+		AirmassInputs& inputs,
+		const ValueProvider3D* estimate = nullptr,
+		bool resolveMap = true,
+		bool liveCalibration = false);
 void resolveCapturedMap(AirmassInputs& inputs, const ValueProvider3D* estimate = nullptr);
 // Implemented by the live load consumer owner. Dry queries validate without publication.
-bool processAirmassConsumerLoads(const AirmassInputs& inputs, mass_t mass, bool publish);
+bool processAirmassConsumerLoads(const AirmassInputs& inputs, mass_t mass, bool publish, bool* fallbackUsed = nullptr);
+bool processAirmassConsumerLoads(
+		const AirmassInputs& inputs,
+		mass_t mass,
+		const AirmassResolvedLoads& loads,
+		bool publish,
+		bool* fallbackUsed = nullptr);
 
 struct AirmassEvaluation {
+	bool Degraded = false;
 	AirmassResult Result;
 	// Describes usable inputs/results separately from legacy numeric fault fallbacks.
 	// Table compatibility is checked; calibration quality and composite fault
@@ -162,6 +211,7 @@ void publishAirmassPressure(const AirmassInputs& inputs, float coefficient, bool
 struct AirmassDiagnostics {
 	float TemperatureK = 0;
 	bool TemperatureValid = false;
+	bool TemperatureFallback = false;
 	AirmassTemperatureSource TemperatureSource = AirmassTemperatureSource::Tcharge;
 	float BaroCoefficient = 1;
 	uint8_t PressureFlags = 0;
@@ -184,7 +234,11 @@ public:
 
 protected:
 	class DiagnosticsTarget;
-	VeEvaluation evaluateRawVe(const AirmassInputs& inputs, float load, RawAirmassDiagnostics* diagnostics) const;
+	VeEvaluation evaluateRawVe(
+			const AirmassInputs& inputs,
+			float load,
+			RawAirmassDiagnostics* diagnostics,
+			bool liveCalibration = false) const;
 	VeEvaluation evaluateVe(const AirmassInputs& inputs, float load, const DiagnosticsTarget& diagnostics) const;
 	virtual float getDedicatedVeImpl(float rpm, float load) const;
 
@@ -196,6 +250,9 @@ protected:
 		explicit DiagnosticsTarget(VeDiagnostics* diagnostics);
 		explicit DiagnosticsTarget(AirmassDiagnostics* diagnostics);
 
+		bool live() const {
+			return m_postState;
+		}
 		void blend(size_t index, const BlendResult& result) const;
 		void ve(const VeEvaluation& result, float load, float idleLoad) const;
 		void map(const MapEvaluation& result) const;

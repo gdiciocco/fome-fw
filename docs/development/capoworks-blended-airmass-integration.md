@@ -1,5 +1,29 @@
 # Capoworks blended airmass integration
 
+## PR integration (2026-10-03)
+
+Capoworks includes `feature/blended-airmass-pr` through `6d51a9003e` with its
+calibration cache, prepared load cursors and per-cylinder publication, and reduced
+synchronous trigger preparation. The complete PR also brings healthy-model
+fallback and automatic recovery after a fresh valid fuel publication. The old
+composite rearm command and button are removed; priming uses normal startup rules.
+See the [current operator guide](../user/blended-airmass.md).
+
+Capoworks CAN controllers, Hella sensor, verified flash writes, ADC lifecycle,
+trigger lifecycle, VVT cranking threshold and HPFP pending-close guards remain.
+Blocking factor stays at 1600 for the combined output-channel layout, and reserved
+configuration policy bits retain their storage. The flash-write regression now
+checks that neither a burn nor a retry admits injection before fresh fuel is
+published, and that recovery then occurs automatically.
+
+The combined engine suite passes **1041/1041 tests in 166 suites**; ADC lifecycle
+suites pass **36/36 and 21/21** using `make -j12 test`. Configuration remains
+25148 bytes, telemetry 1564 bytes and flash format 260930. Build and deployment
+evidence is stored under
+`/home/deffie/fome-artifacts/blended-airmass/capoworks-pr-integration-2026-10-03/`.
+
+The records below describe earlier integrations and their validation results.
+
 ## Revision integration (2026-09-30)
 
 Capoworks now includes `feature/blended-airmass` through `35bb993512`.

@@ -3,6 +3,20 @@
 #include "lambda_monitor.h"
 #include "airmass_loads.h"
 
+namespace {
+bool isEnginePhysicallyStopped(float rpmValue) {
+#if EFI_SHAFT_POSITION_INPUT
+	chibios_rt::CriticalSectionLocker csl;
+	const auto rpm = Sensor::get(SensorType::Rpm);
+	return std::isfinite(rpmValue) && rpmValue == 0 && engine->rpmCalculator.getState() == STOPPED &&
+		   engine->rpmCalculator.getCachedRpm() == 0 && rpm && rpm.Value == 0 &&
+		   !engine->triggerCentral.engineMovedRecently();
+#else
+	return false;
+#endif
+}
+} // namespace
+
 float LambdaMonitor::getMaxAllowedLambda(float rpm, float /*load*/) const {
 	const float load = getAirmassConsumerLoad(AirmassConsumer::LambdaDeviation);
 	if (!std::isfinite(load)) {
@@ -52,13 +66,15 @@ bool LambdaMonitorBase::isCurrentlyGood(float rpm, float load) const {
 	if (!engineConfiguration->lambdaProtectionEnable) {
 		return true;
 	}
-	if (!std::isfinite(load)) {
-		return false;
-	}
 
 	// Below min RPM, don't check
 	if (rpm < engineConfiguration->lambdaProtectionMinRpm) {
 		return true;
+	}
+
+	// At monitored RPM, an invalid load is a fault rather than a reason to skip protection.
+	if (!std::isfinite(load)) {
+		return false;
 	}
 
 	// Below min load, don't check
@@ -102,6 +118,12 @@ bool LambdaMonitorBase::isCurrentlyGood(float rpm, float load) const {
 }
 
 bool LambdaMonitorBase::restoreConditionsMet(float rpm, float load) const {
+	// A confirmed stop ends the previous run, so a lambda cut must not carry into the next start.
+	// Low or invalid RPM samples alone are not enough to clear a cut.
+	if (isEnginePhysicallyStopped(rpm)) {
+		return true;
+	}
+
 	if (!std::isfinite(load)) {
 		return false;
 	}

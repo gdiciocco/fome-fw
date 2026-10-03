@@ -53,14 +53,13 @@ static SensorResult getAxisValue(gppwm_channel_e channel) {
 	return readGppwmChannel(channel);
 }
 
-static expected<BlendResult> calculateBoostBlend(
-		const blend_table_s& blend, expected<float> xAxis, float parentYAxis) {
+static expected<BlendResult> calculateBoostBlend(const blend_table_s& blend, expected<float> xAxis, float parentYAxis) {
 	if (blend.blendParameter == GPPWM_Zero) {
 		return BlendResult{};
 	}
 	const auto parameter = readGppwmChannel(blend.blendParameter);
-	const auto yAxis = blend.yAxisOverride == GPPWM_Zero ? expected<float>(parentYAxis)
-															 : readGppwmChannel(blend.yAxisOverride);
+	const auto yAxis =
+			blend.yAxisOverride == GPPWM_Zero ? expected<float>(parentYAxis) : readGppwmChannel(blend.yAxisOverride);
 	if (!xAxis || !yAxis || !parameter || !std::isfinite(xAxis.Value) || !std::isfinite(yAxis.Value) ||
 		!std::isfinite(parameter.Value)) {
 		return unexpected;

@@ -54,26 +54,39 @@ TEST(airmassInjectionGate, StartupRequiresPositiveRpmAndCompletePublication) {
 	gate().completeCalculation(token, true);
 	EXPECT_TRUE(gate().allowInjection());
 	EXPECT_EQ(static_cast<uint8_t>(Status::Ready), engine->outputChannels.blendedStatus);
-	EXPECT_FALSE(gate().allowPrime());
+	EXPECT_TRUE(gate().allowPrime());
 }
 
-TEST(airmassInjectionGate, FaultSurvivesStrategyChangesAndValidCalculations) {
+TEST(airmassInjectionGate, SensorFaultRecoversOnFreshPublicationWithoutStopping) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	selectComposite();
 	makeReady();
 	gate().rejectCalculation(Fault::Sensor);
 	EXPECT_FALSE(getLimpManager()->allowInjection().value);
 	EXPECT_EQ(ClearReason::Airmass, getLimpManager()->allowInjection().reason);
-	engineConfiguration->fuelAlgorithm = LM_SPEED_DENSITY;
-	EXPECT_FALSE(gate().allowInjection());
-	EXPECT_FALSE(gate().allowPrime());
-	engineConfiguration->fuelAlgorithm = LM_SD_ALPHA_N;
-	auto token = beginPositiveCalculation();
-	gate().acceptCalculation();
-	gate().completeCalculation(token, true);
-	EXPECT_EQ(Status::Latched, gate().status());
+	EXPECT_EQ(Status::Faulted, gate().status());
 	EXPECT_EQ(Fault::Sensor, gate().fault());
-	EXPECT_FALSE(gate().rearm());
+	// The same running RPM recovers; no stop transition or operator action.
+	makeReady();
+	EXPECT_TRUE(gate().allowInjection());
+	EXPECT_EQ(Fault::None, gate().fault());
+}
+
+TEST(airmassInjectionGate, DegradedPublicationAdmitsFuelAndNormalPublicationClearsFallback) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	selectComposite();
+	auto token = beginPositiveCalculation();
+	gate().acceptCalculation(Fault::Sensor);
+	gate().completeCalculation(token, true);
+	ASSERT_EQ(Status::Degraded, gate().status());
+	EXPECT_EQ(Fault::Sensor, gate().fault());
+	EXPECT_TRUE(gate().allowInjection());
+	EXPECT_TRUE(engine->engineState.veAnalyzeSessionInvalid);
+	ASSERT_TRUE(queuePulse(100, 200));
+	eth.moveTimeForwardAndInvokeEventsUs(200);
+	makeReady();
+	EXPECT_EQ(Fault::None, gate().fault());
+	EXPECT_TRUE(gate().allowInjection());
 }
 
 TEST(airmassInjectionGate, StopAndConfigWriteInvalidateOldPublication) {
@@ -108,11 +121,13 @@ TEST(airmassInjectionGate, StrategyChangedAwayAndBackCannotReuseToken) {
 	gate().onConfigurationWrite(LM_SD_ALPHA_N, true);
 	engineConfiguration->fuelAlgorithm = LM_SD_ALPHA_N;
 	gate().completeCalculation(old, true);
-	EXPECT_EQ(Status::Latched, gate().status());
-	EXPECT_EQ(Fault::StrategyChange, gate().fault());
+	EXPECT_EQ(Status::NotReady, gate().status());
+	EXPECT_FALSE(gate().allowInjection());
+	makeReady();
+	EXPECT_TRUE(gate().allowInjection());
 }
 
-TEST(airmassInjectionGate, InvalidFinalPublicationLatchesAndNanRpmCannotUnlock) {
+TEST(airmassInjectionGate, InvalidFinalPublicationRecoversOnlyOnFreshValidFuel) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	selectComposite();
 	auto token = beginPositiveCalculation();
@@ -123,31 +138,29 @@ TEST(airmassInjectionGate, InvalidFinalPublicationLatchesAndNanRpmCannotUnlock) 
 	token = beginPositiveCalculation();
 	gate().acceptCalculation();
 	gate().completeCalculation(token, false);
-	EXPECT_EQ(Status::Latched, gate().status());
+	EXPECT_EQ(Status::Faulted, gate().status());
 	EXPECT_EQ(Fault::Result, gate().fault());
+	makeReady();
+	EXPECT_TRUE(gate().allowInjection());
 }
 
-TEST(airmassInjectionGate, AcceptedLegacyPulseDrainsBeforeStoppedRearm) {
+TEST(airmassInjectionGate, AcceptedLegacyPulseDrainsAcrossStrategyChange) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	ASSERT_TRUE(queuePulse(1000, 3000));
 	EXPECT_EQ(2, gate().pendingCallbacks());
 	selectComposite();
 	EXPECT_FALSE(gate().allowInjection());
-	EXPECT_EQ(Status::Latched, gate().status());
-	EXPECT_FALSE(gate().rearm());
-
+	EXPECT_EQ(Status::NotReady, gate().status());
+	// New strategy may publish while old callbacks still own their pulses.
+	makeReady();
+	ASSERT_TRUE(queuePulse(2000, 4000));
+	eth.moveTimeForwardAndInvokeEventsUs(2000);
+	EXPECT_EQ(2, enginePins.injectors[0].getOverlappingCounter());
 	eth.moveTimeForwardAndInvokeEventsUs(1000);
 	EXPECT_EQ(1, enginePins.injectors[0].getOverlappingCounter());
-	EXPECT_EQ(1, gate().pendingCallbacks());
-	EXPECT_FALSE(gate().rearm());
-	eth.moveTimeForwardAndInvokeEventsUs(2000);
+	eth.moveTimeForwardAndInvokeEventsUs(1000);
 	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
 	EXPECT_EQ(0, gate().pendingCallbacks());
-	ASSERT_TRUE(gate().rearm());
-	EXPECT_EQ(Status::NotReady, gate().status());
-	EXPECT_FALSE(gate().allowInjection());
-	EXPECT_EQ(0, engine->scheduler.size());
-	makeReady();
 }
 
 TEST(airmassInjectionGate, OverlappingPrimaryAndStage2CallbacksRemainBalancedAfterFault) {
@@ -189,8 +202,6 @@ TEST(airmassInjectionGate, FaultPreventsNewSplitButQueuedSplitDrains) {
 	EXPECT_EQ(0, gate().pendingCallbacks());
 	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
 
-	Sensor::setMockValue(SensorType::Rpm, 0);
-	ASSERT_TRUE(gate().rearm());
 	makeReady();
 	ASSERT_TRUE(queuePulse(1000, 2000, ctx));
 	eth.moveTimeForwardAndInvokeEventsUs(2000);
@@ -201,45 +212,23 @@ TEST(airmassInjectionGate, FaultPreventsNewSplitButQueuedSplitDrains) {
 	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
 }
 
-TEST(airmassInjectionGate, DelayedLegacyPrimeIsSuppressedAtActualStart) {
+TEST(airmassInjectionGate, CompositePrimeRetainsUpstreamStartupBehavior) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	MockInjectorModel2 injector;
+	engine->module<InjectorModelPrimary>().set(&injector);
+	EXPECT_CALL(injector, getInjectionDuration(testing::_)).WillOnce(Return(20.0f));
 	engineConfiguration->primingDelay = 0;
 	engine->module<PrimeController>()->onIgnitionStateChanged(true);
 	ASSERT_EQ(1, gate().pendingCallbacks());
 	selectComposite();
-	EXPECT_FALSE(gate().rearm());
 	eth.moveTimeForwardAndInvokeEventsUs(100000);
+	EXPECT_TRUE(engine->module<PrimeController>()->isPriming());
+	EXPECT_EQ(1, enginePins.injectors[0].getOverlappingCounter());
+	eth.moveTimeForwardAndInvokeEventsUs(20000);
 	EXPECT_EQ(0, gate().pendingCallbacks());
 	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
-	ASSERT_TRUE(gate().rearm());
 	EXPECT_FALSE(engine->module<PrimeController>()->isPriming());
 	EXPECT_EQ(0, engine->scheduler.size());
-}
-
-TEST(airmassInjectionGate, DelayedPrimeHonorsDriverIntentAndDrainsBeforeCompositeRearm) {
-	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	engineConfiguration->primingDelay = 0;
-	engineConfiguration->isCylinderCleanupEnabled = true;
-	Sensor::setMockValue(SensorType::Tps1, 0);
-	Sensor::setMockValue(SensorType::DriverThrottleIntent, 0);
-	engine->module<PrimeController>()->onIgnitionStateChanged(true);
-	ASSERT_EQ(1, gate().pendingCallbacks());
-
-	// ETB can stay shut while the driver requests flood clear during the delay.
-	Sensor::setMockValue(SensorType::DriverThrottleIntent, 95);
-	eth.moveTimeForwardAndInvokeEventsUs(100000);
-	EXPECT_FALSE(engine->module<PrimeController>()->isPriming());
-	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
-	EXPECT_EQ(0, engine->scheduler.size());
-	EXPECT_EQ(0, gate().pendingCallbacks());
-
-	selectComposite();
-	EXPECT_TRUE(gate().rearm());
-	EXPECT_EQ(Status::NotReady, gate().status());
-	Sensor::setMockValue(SensorType::DriverThrottleIntent, 0);
-	engine->module<PrimeController>()->onIgnitionStateChanged(true);
-	EXPECT_EQ(0, engine->scheduler.size());
-	EXPECT_EQ(0, gate().pendingCallbacks());
 }
 
 TEST(airmassInjectionGate, ActivePrimeClosesCapturedMaskAfterConfigurationChange) {
@@ -259,34 +248,20 @@ TEST(airmassInjectionGate, ActivePrimeClosesCapturedMaskAfterConfigurationChange
 	EXPECT_FALSE(engine->module<PrimeController>()->isPriming());
 }
 
-TEST(airmassInjectionGate, SpinningUpCannotRearmEvenWithZeroSensorRpm) {
+TEST(airmassInjectionGate, InvalidRpmCannotAuthorizeRecovery) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
-	eth.setTriggerType(trigger_type_e::TT_ONE);
-	engineConfiguration->isFasterEngineSpinUpEnabled = true;
 	selectComposite();
 	makeReady();
 	gate().rejectCalculation(Fault::Sensor);
-	Sensor::setMockValue(SensorType::Rpm, 0);
-	eth.fireRise(1);
-	ASSERT_EQ(SPINNING_UP, engine->rpmCalculator.getState());
-	ASSERT_EQ(0, engine->rpmCalculator.getCachedRpm());
-	ASSERT_TRUE(engine->rpmCalculator.isStopped()); // Engine-math predicate, not physical stop.
-	ASSERT_TRUE(engine->triggerCentral.engineMovedRecently());
-
-	engine->periodicSlowCallback();
-	EXPECT_EQ(SPINNING_UP, engine->rpmCalculator.getState());
-	EXPECT_FALSE(gate().rearm());
-
-	advanceTimeUs(10e6);
-	ASSERT_FALSE(engine->triggerCentral.engineMovedRecently());
-	EXPECT_FALSE(gate().rearm()); // Timeout must still go through the stop transition.
-	engine->periodicSlowCallback();
-	EXPECT_EQ(STOPPED, engine->rpmCalculator.getState());
-	EXPECT_EQ(Status::Latched, gate().status());
-	EXPECT_EQ(Fault::Sensor, gate().fault());
-	EXPECT_TRUE(gate().rearm());
-	EXPECT_EQ(Status::NotReady, gate().status());
-	EXPECT_FALSE(gate().allowInjection());
+	for (float rpm : {0.0f, -1.0f, NAN}) {
+		Sensor::setMockValue(SensorType::Rpm, rpm);
+		auto token = gate().beginCalculation(LM_SD_ALPHA_N, rpm, engine->getGlobalConfigurationVersion());
+		gate().acceptCalculation();
+		gate().completeCalculation(token, true);
+		EXPECT_FALSE(gate().allowInjection());
+	}
+	makeReady();
+	EXPECT_TRUE(gate().allowInjection());
 }
 
 TEST(airmassInjectionGate, AccountingPrecedesImmediateCallbacks) {
@@ -327,9 +302,13 @@ TEST(airmassInjectionGate, ExhaustedPoolAdmitsNoPulseAndRollsBackAccounting) {
 	EXPECT_FALSE(queuePulse(0, 1000));
 	EXPECT_EQ(0, gate().pendingCallbacks());
 	EXPECT_EQ(0, enginePins.injectors[0].getOverlappingCounter());
-	EXPECT_EQ(Status::Latched, gate().status());
+	EXPECT_EQ(Status::Faulted, gate().status());
 	EXPECT_EQ(Fault::Scheduling, gate().fault());
 	eth.moveTimeForwardAndInvokeEventsUs(10000);
+	makeReady();
+	ASSERT_TRUE(queuePulse(100, 200));
+	eth.moveTimeForwardAndInvokeEventsUs(200);
+	EXPECT_EQ(0, gate().pendingCallbacks());
 }
 
 TEST(airmassInjectionGate, StandaloneModelsRequireValidPublicationAndRecoverWithoutRearm) {
@@ -351,8 +330,8 @@ TEST(airmassInjectionGate, StandaloneModelsRequireValidPublicationAndRecoverWith
 		gate().completeCalculation(token, true);
 		EXPECT_FALSE(gate().allowInjection());
 		EXPECT_TRUE(gate().allowPrime());
-		EXPECT_EQ(Status::Legacy, gate().status());
-		EXPECT_EQ(Fault::None, gate().fault());
+		EXPECT_EQ(Status::Faulted, gate().status());
+		EXPECT_EQ(Fault::Result, gate().fault());
 
 		token = beginPositiveCalculation();
 		engine->engineState.airmassCalculationValid = true;
@@ -378,7 +357,7 @@ TEST(airmassInjectionGate, StandaloneRejectDrainsAcceptedPulseAndBlocksWallFuelA
 	gate().rejectCalculation(Fault::Load);
 	EXPECT_FALSE(gate().allowInjection());
 	EXPECT_FALSE(queuePulse(1000, 3000));
-	EXPECT_EQ(Status::Legacy, gate().status());
+	EXPECT_EQ(Status::Faulted, gate().status());
 
 	// Even stale positive cylinder fuel and a wall-film state cannot get as far
 	// as duration calculation once the standalone admission gate has closed.
@@ -482,4 +461,91 @@ TEST(airmassInjectionGate, StandaloneRecalculationCannotRetainFuelAcrossInvalidR
 	// Returning to the old version does not restore the old admission state.
 	beginPositiveCalculation();
 	EXPECT_FALSE(gate().allowInjection());
+}
+
+TEST(airmassInjectionGate, CompositeStaleCompletionCannotCloseNewerReadyPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	selectComposite();
+	auto old = beginPositiveCalculation();
+	gate().acceptCalculation();
+	makeReady();
+	gate().completeCalculation(old, false);
+	EXPECT_TRUE(gate().allowInjection());
+	EXPECT_EQ(Status::Ready, gate().status());
+}
+
+TEST(airmassInjectionGate, CompositeVersionChangeRequiresFreshPublication) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	selectComposite();
+	makeReady();
+	gate().beginCalculation(LM_SD_ALPHA_N, 1000, engine->getGlobalConfigurationVersion() + 1);
+	EXPECT_FALSE(gate().allowInjection());
+	EXPECT_EQ(Status::NotReady, gate().status());
+	beginPositiveCalculation();
+	EXPECT_FALSE(gate().allowInjection());
+	makeReady();
+	EXPECT_TRUE(gate().allowInjection());
+}
+
+TEST(airmassInjectionGate, ExecutorValidatesEachAdmittedBatchOnceAndRollsBackInvalidWork) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	selectComposite();
+	makeReady();
+	const auto validations = scheduleBatchValidationCount;
+	ASSERT_TRUE(queuePulse(100, 200));
+	EXPECT_EQ(scheduleBatchValidationCount, validations + 1);
+	ASSERT_EQ(gate().pendingCallbacks(), 2);
+	const auto now = getTimeNowNt();
+	ScheduledAction valid[] = {{now + US2NT(100), {+[](void*) {}, nullptr}}};
+	ScheduledAction missingAction[] = {{now, {}}};
+	ScheduledAction unsorted[] = {{now + 2, valid[0].action}, {now + 1, valid[0].action}};
+	ScheduledAction tooFar[] = {{now + US2NT(MaximumScheduleDelayUs), valid[0].action}};
+	ScheduledAction overflow[] = {{efitick_t{INT64_MAX}, valid[0].action}};
+
+	const auto reject = [&](const ScheduledAction* events, size_t count) {
+		makeReady();
+		const auto before = scheduleBatchValidationCount;
+		EXPECT_FALSE(scheduleFuelCallbacks(events, count));
+		EXPECT_EQ(scheduleBatchValidationCount, before + 1);
+		EXPECT_EQ(gate().pendingCallbacks(), 2);
+		EXPECT_EQ(engine->scheduler.size(), 2);
+		EXPECT_EQ(gate().fault(), Fault::Scheduling);
+		EXPECT_FALSE(gate().allowInjection());
+		EXPECT_EQ(engine->outputChannels.blendedStatus, static_cast<uint8_t>(Status::Faulted));
+		EXPECT_EQ(engine->outputChannels.blendedFault, static_cast<uint8_t>(Fault::Scheduling));
+	};
+	reject(nullptr, 1);
+	reject(valid, 0);
+	reject(valid, MaxScheduleBatchSize + 1);
+	reject(missingAction, efi::size(missingAction));
+	reject(unsorted, efi::size(unsorted));
+	reject(tooFar, efi::size(tooFar));
+	reject(overflow, efi::size(overflow));
+
+	// The previously accepted open/close drain even after every new batch faults.
+	eth.moveTimeForwardAndInvokeEventsUs(200);
+	EXPECT_EQ(gate().pendingCallbacks(), 0);
+	EXPECT_EQ(enginePins.injectors[0].getOverlappingCounter(), 0);
+	makeReady();
+	ASSERT_TRUE(queuePulse(100, 200));
+	eth.moveTimeForwardAndInvokeEventsUs(200);
+	EXPECT_EQ(gate().pendingCallbacks(), 0);
+}
+
+TEST(airmassInjectionGate, CallbackCounterOverflowRejectsBeforeInsertionWithoutLosingPendingWork) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	selectComposite();
+	makeReady();
+	{
+		chibios_rt::CriticalSectionLocker csl;
+		ASSERT_TRUE(gate().locked(csl).callbacksAccepted(UINT16_MAX - 1));
+	}
+	EXPECT_FALSE(queuePulse(100, 200));
+	EXPECT_EQ(gate().pendingCallbacks(), UINT16_MAX - 1);
+	EXPECT_EQ(engine->scheduler.size(), 0);
+	EXPECT_EQ(gate().fault(), Fault::Scheduling);
+	{
+		chibios_rt::CriticalSectionLocker csl;
+		gate().locked(csl).callbacksRejected(UINT16_MAX - 1);
+	}
 }

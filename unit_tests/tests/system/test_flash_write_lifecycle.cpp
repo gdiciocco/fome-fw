@@ -127,7 +127,7 @@ TEST_F(FlashWriteLifecycle, FailedPendingWriteRemainsVisibleWithoutContinuousRet
 	EXPECT_EQ(flash_lifecycle_test::events.size(), 6u);
 }
 
-TEST_F(FlashWriteLifecycle, VerifiedBurnAndRetryPreserveCompositeFaultLatch) {
+TEST_F(FlashWriteLifecycle, VerifiedBurnAndRetryRequireFreshCompositePublication) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	engineConfiguration->fuelAlgorithm = LM_SD_ALPHA_N;
 	auto& gate = engine->airmassInjectionState;
@@ -136,34 +136,38 @@ TEST_F(FlashWriteLifecycle, VerifiedBurnAndRetryPreserveCompositeFaultLatch) {
 	gate.rejectCalculation(AirmassInjectionFault::Sensor);
 	Sensor::setMockValue(SensorType::Rpm, 0);
 	gate.onEngineStop();
-	const auto expectLatched = [&] {
-		EXPECT_EQ(AirmassInjectionStatus::Latched, gate.status());
-		EXPECT_EQ(AirmassInjectionFault::Sensor, gate.fault());
+	const auto expectNotReady = [&] {
+		EXPECT_EQ(AirmassInjectionStatus::NotReady, gate.status());
+		EXPECT_EQ(AirmassInjectionFault::None, gate.fault());
 		EXPECT_FALSE(getLimpManager()->allowInjection().value);
-		EXPECT_FALSE(gate.allowPrime());
+		EXPECT_TRUE(gate.allowPrime());
 	};
-	flash_lifecycle_test::duringWrite = expectLatched;
+	flash_lifecycle_test::duringWrite = expectNotReady;
 
 	// Exercise the burn notification and verified writer, including its failure
-	// recovery, without treating either successful operation as explicit rearm.
+	// recovery, without treating either operation as a completed fuel publication.
 	onBurnRequest();
 	flash_lifecycle_test::nextResult = {ConfigurationWritePhase::Verify, 0x100000, FLASH_RETURN_BAD_FLASH, 0};
 	flash_lifecycle_test::setNeedToWriteConfiguration();
 	flash_lifecycle_test::writeToFlashIfPending();
-	expectLatched();
+	expectNotReady();
 	EXPECT_TRUE(flash_lifecycle_test::getNeedToWriteConfiguration());
 
 	flash_lifecycle_test::nextResult = {ConfigurationWritePhase::Complete, 0, FLASH_RETURN_SUCCESS, 2};
 	onBurnRequest();
 	flash_lifecycle_test::setNeedToWriteConfiguration();
 	flash_lifecycle_test::writeToFlashIfPending();
-	expectLatched();
+	expectNotReady();
 	EXPECT_FALSE(flash_lifecycle_test::getNeedToWriteConfiguration());
 	EXPECT_EQ(flash_lifecycle_test::errors, 1u);
 	EXPECT_EQ(flash_lifecycle_test::events, (std::vector<char>{'B', 'W', 'E', 'B', 'W', 'E'}));
-	EXPECT_TRUE(gate.rearm());
-	EXPECT_EQ(AirmassInjectionStatus::NotReady, gate.status());
 	EXPECT_FALSE(gate.allowInjection());
+	Sensor::setMockValue(SensorType::Rpm, 1000);
+	const auto token = gate.beginCalculation(LM_SD_ALPHA_N, 1000, engine->getGlobalConfigurationVersion());
+	gate.acceptCalculation();
+	gate.completeCalculation(token, true);
+	EXPECT_EQ(AirmassInjectionStatus::Ready, gate.status());
+	EXPECT_TRUE(gate.allowInjection());
 }
 
 TEST_F(FlashWriteLifecycle, ConcurrentFlashDoesNotSuspendActuatorsOrSensorTimeouts) {

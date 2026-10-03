@@ -18,10 +18,6 @@ static bool validAuthorityAxis(const T (&axis)[N], float maximum) {
 }
 
 bool isBlendedAirmassConfigurationValid() {
-	if (engineConfiguration->useSeparateVeForIdle && config->idleVeModel != IdleVeModel::SpeedDensity &&
-		config->idleVeModel != IdleVeModel::AlphaN) {
-		return false;
-	}
 	if (!isRawAirmassConfigurationValid() || !std::isfinite(engineConfiguration->displacement) ||
 		engineConfiguration->displacement <= 0 || engine->engineState.cylinderCount <= 0 ||
 		!validAuthorityAxis(config->airmassBlendTpsBins, 100) ||
@@ -64,8 +60,10 @@ public:
 			capture->EffectiveAuthority = 0;
 			capture->Corrections.HasValue = false;
 			capture->Corrections.Valid = false;
+			capture->Corrections.Fallback = false;
 			capture->Flags = 0;
 			capture->TemperatureValid = false;
+			capture->TemperatureFallback = false;
 			capture->BaroCoefficient = 1;
 		}
 	}
@@ -100,6 +98,7 @@ public:
 	}
 
 	void map(const MapEvaluation& value) {
+		m_mapFallback = value.Fallback;
 		if (value.HasValue) {
 			m_flags |= BlendedEstimateEvaluated;
 		}
@@ -116,9 +115,13 @@ public:
 	}
 
 	void inputs(const AirmassInputs& inputs) {
+		if (inputs.TemperatureFallback) {
+			m_flags |= BlendedTemperatureFallback;
+		}
 		if (m_capture) {
 			m_capture->TemperatureK = inputs.TemperatureK;
 			m_capture->TemperatureValid = inputs.TemperatureValid;
+			m_capture->TemperatureFallback = inputs.TemperatureFallback;
 			m_capture->TemperatureSource = inputs.TemperatureSource;
 			m_capture->PressureFlags = getAirmassPressureFlags(inputs, false);
 		}
@@ -128,25 +131,55 @@ public:
 		}
 	}
 
-	bool consumers(const AirmassInputs& inputs, mass_t mass) {
-		return processAirmassConsumerLoads(inputs, mass, m_postState);
+	bool live() const {
+		return m_postState;
 	}
 
-	void authority(float value) {
+	bool consumers(const AirmassInputs& inputs, mass_t mass, const AirmassResolvedLoads& loads) {
+		bool fallbackUsed = false;
+		const bool valid = processAirmassConsumerLoads(inputs, mass, loads, m_postState, &fallbackUsed);
+		m_flags |= fallbackUsed ? BlendedLoadFallback : 0;
+		return valid;
+	}
+
+	AirmassInjectionFault fallbackFault() const {
+		if (m_flags & BlendedCorrectionFallback) {
+			return AirmassInjectionFault::Correction;
+		}
+		if (m_flags & (BlendedTemperatureFallback | BlendedBaroFallback | BlendedIdleFallback | BlendedMapFallback)) {
+			return AirmassInjectionFault::Sensor;
+		}
+		return AirmassInjectionFault::Load;
+	}
+
+	void authority(float requested, float effective, bool available, bool fallback) {
+		m_flags |= available ? 0 : BlendedAuthorityUnavailable;
+		m_flags |= fallback ? BlendedBranchFallback : 0;
 		if (m_capture) {
-			m_capture->RequestedAuthority = value;
-			m_capture->EffectiveAuthority = value;
+			m_capture->RequestedAuthority = requested;
+			m_capture->EffectiveAuthority = effective;
 		}
 		if (m_postState) {
-			engine->outputChannels.blendedRequestedAuthority = value;
-			engine->outputChannels.blendedEffectiveAuthority = value;
+			engine->outputChannels.blendedRequestedAuthority = requested;
+			engine->outputChannels.blendedEffectiveAuthority = effective;
 		}
+	}
+
+	bool degraded() const {
+		return m_flags &
+			   (BlendedTemperatureFallback | BlendedBranchFallback | BlendedAuthorityUnavailable | BlendedBaroFallback |
+				BlendedIdleFallback | BlendedCorrectionFallback | BlendedMapFallback | BlendedLoadFallback);
 	}
 
 	void branch(bool sd, const AirmassEvaluation& value, const RawAirmassDiagnostics& raw) {
+		m_flags |= raw.IdleFallback ? BlendedIdleFallback : 0;
+		m_flags |= raw.BaroFallback ? BlendedBaroFallback : 0;
 		m_flags |= sd ? BlendedSdEvaluated : BlendedAlphaNEvaluated;
 		if (value.Valid) {
 			m_flags |= sd ? BlendedSdValid : BlendedAlphaNValid;
+			if (sd && m_mapFallback) {
+				m_flags |= BlendedMapFallback;
+			}
 		}
 		if (m_capture) {
 			(sd ? m_capture->SdMass : m_capture->AlphaNMass) = value.Result.CylinderAirmass;
@@ -181,6 +214,7 @@ public:
 		auto* capture = m_capture ? &m_capture->Corrections : nullptr;
 		auto value =
 				m_postState ? evaluateAirmassCorrectionsForFuel(inputs) : evaluateAirmassCorrections(inputs, capture);
+		m_flags |= value.Fallback ? BlendedCorrectionFallback : 0;
 		if (m_postState) {
 			engine->outputChannels.blendedCorrection = std::isfinite(value.Multiplier) ? value.Multiplier : 0;
 		}
@@ -211,6 +245,7 @@ private:
 	BlendedAirmassDiagnostics* m_capture = nullptr;
 	uint16_t m_flags = 0;
 	bool m_postState = false;
+	bool m_mapFallback = false;
 };
 
 AirmassResult BlendedAirmass::getAirmass(float rpm, bool postState) {
@@ -235,61 +270,82 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 		diagnostics.finish(false);
 		return evaluation;
 	};
-	if (!isBlendedAirmassConfigurationValid()) {
+	if (!isRawAirmassConfigurationValid()) {
 		return fail(AirmassInjectionFault::Configuration);
 	}
 	if (!std::isfinite(rpm) || rpm <= 0) {
 		return fail(AirmassInjectionFault::Sensor);
 	}
 	AirmassInputs inputs;
-	m_sd.captureInputs(rpm, inputs);
+	m_sd.captureInputs(rpm, inputs, diagnostics.live());
 	inputs.Composite = true;
 	inputs.Model = LM_SD_ALPHA_N;
 	inputs.NativeLoad = inputs.EffectiveMap.Map;
 	diagnostics.inputs(inputs);
 	diagnostics.map(inputs.EffectiveMap);
-	// TPS selects authority even at a mass endpoint. MAP remains required by the
-	// default load and common corrections, independently of either mass branch.
-	if (!inputs.Tps || !std::isfinite(inputs.Tps.Value) || inputs.Tps.Value < 0 || inputs.Tps.Value > 100) {
-		return fail(AirmassInjectionFault::Sensor);
-	}
-	const float interpolatedAuthority = interpolateAuthority(inputs.Tps.Value, inputs.Rpm);
+	const bool authorityConfigurationValid = isRawAirmassConfigurationValid() &&
+											 isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::Authority);
+	const auto normalizedTps = normalizeAirmassPercent(inputs, inputs.Tps);
+	const bool authorityAvailable = authorityConfigurationValid && normalizedTps;
+	const float interpolatedAuthority = authorityAvailable ? interpolateAuthority(normalizedTps.Value, inputs.Rpm) : 0;
 	if (!std::isfinite(interpolatedAuthority)) {
 		return fail(AirmassInjectionFault::Configuration);
 	}
-	// Configuration validation already bounds every cell. Contain rounding at
-	// the domain edges without snapping legitimate fractional authority.
-	const float authority = clampF(0, interpolatedAuthority, 100);
-	diagnostics.authority(authority);
-	if ((authority < 100 && !isAirmassModelConfigurationValid(LM_SPEED_DENSITY)) ||
-		(authority > 0 && !isAirmassModelConfigurationValid(LM_ALPHA_N))) {
-		return fail(AirmassInjectionFault::Configuration);
-	}
-	float sdMass = 0;
-	float alphaNMass = 0;
-	if (authority < 100) {
+	// When TPS fails, SD can still run from measured MAP or the permitted
+	// estimate. Alpha-N remains unavailable because its TPS input is invalid.
+	const float requestedAuthority = clampF(0, interpolatedAuthority, 100);
+	float authority = requestedAuthority;
+	AirmassEvaluation sd;
+	AirmassEvaluation alphaN;
+	bool sdEvaluated = false;
+	bool alphaNEvaluated = false;
+	AirmassInjectionFault branchFault =
+			authorityConfigurationValid ? AirmassInjectionFault::Sensor : AirmassInjectionFault::Configuration;
+	const auto evaluateBranch = [&](bool speedDensity) {
 		RawAirmassDiagnostics raw;
-		auto sd = m_sd.evaluateRawAirmass(inputs, &raw);
-		diagnostics.branch(true, sd, raw);
-		if (!sd.Valid) {
-			return fail(raw.HasValue ? AirmassInjectionFault::Result : AirmassInjectionFault::Sensor);
+		auto value = speedDensity ? m_sd.evaluateRawAirmassImpl(inputs, &raw, diagnostics.live())
+								  : m_alphaN.evaluateRawAirmassImpl(
+											inputs, &raw, AlphaNPressurePolicy::PureReference, diagnostics.live());
+		diagnostics.branch(speedDensity, value, raw);
+		if (!value.Valid) {
+			if (!isCapturedAirmassModelValid(inputs, speedDensity ? LM_SPEED_DENSITY : LM_ALPHA_N)) {
+				branchFault = AirmassInjectionFault::Configuration;
+			} else if (raw.HasValue && branchFault != AirmassInjectionFault::Configuration) {
+				branchFault = AirmassInjectionFault::Result;
+			}
 		}
-		sdMass = sd.Result.CylinderAirmass;
+		(speedDensity ? sdEvaluated : alphaNEvaluated) = true;
+		(speedDensity ? sd : alphaN) = value;
+	};
+	if (authority < 100) {
+		evaluateBranch(true);
 	}
 	if (authority > 0) {
-		RawAirmassDiagnostics raw;
-		auto alphaN = m_alphaN.evaluateRawAirmass(inputs, &raw, AlphaNPressurePolicy::PureReference);
-		diagnostics.branch(false, alphaN, raw);
-		if (!alphaN.Valid) {
-			return fail(raw.HasValue ? AirmassInjectionFault::Result : AirmassInjectionFault::Sensor);
-		}
-		alphaNMass = alphaN.Result.CylinderAirmass;
+		evaluateBranch(false);
 	}
-	// Keep exact endpoint arithmetic and skip the unused model altogether.
+	bool fallback = !authorityAvailable;
+	if ((authority < 100 && !sd.Valid) || (authority > 0 && !alphaN.Valid)) {
+		// Evaluate an otherwise unused branch only for recovery. Never mix a
+		// failed branch's numeric payload (including NaN) into a healthy mass.
+		if (!sdEvaluated) {
+			evaluateBranch(true);
+		}
+		if (!alphaNEvaluated) {
+			evaluateBranch(false);
+		}
+		if (!sd.Valid && !alphaN.Valid) {
+			diagnostics.authority(requestedAuthority, 0, authorityAvailable, true);
+			return fail(branchFault);
+		}
+		authority = sd.Valid ? 0 : 100;
+		fallback = true;
+	}
+	diagnostics.authority(requestedAuthority, authority, authorityAvailable, fallback);
 	const float weight = authority * 0.01f;
-	const float rawMass = authority == 0   ? sdMass
-						: authority == 100 ? alphaNMass
-										   : (1 - weight) * sdMass + weight * alphaNMass;
+	const float rawMass = authority == 0 ? sd.Result.CylinderAirmass
+						: authority == 100
+								? alphaN.Result.CylinderAirmass
+								: (1 - weight) * sd.Result.CylinderAirmass + weight * alphaN.Result.CylinderAirmass;
 	const auto correction = diagnostics.corrections(inputs);
 	if (!correction.Valid) {
 		return fail(AirmassInjectionFault::Correction);
@@ -298,18 +354,24 @@ BlendedAirmassEvaluation BlendedAirmass::evaluateAirmass(float rpm, DiagnosticsT
 	if (!std::isfinite(mass) || mass < 0) {
 		return fail(AirmassInjectionFault::Result);
 	}
-	const auto filling = resolveAirmassLoad(inputs, mass, AFR_CylFilling);
+	const AirmassResolvedLoads loads(inputs, mass);
+	const auto filling = loads.strict(AFR_CylFilling);
 	if (!filling.Valid) {
 		return fail(AirmassInjectionFault::Result);
 	}
 	evaluation.NormalizedFilling = filling.Value;
-	evaluation.LambdaLoad = resolveAirmassLoad(inputs, mass, inputs.LambdaOverride);
-	evaluation.IgnitionLoad = resolveAirmassLoad(inputs, mass, inputs.IgnitionOverride);
-	if (!diagnostics.consumers(inputs, mass)) {
+	evaluation.LambdaLoad = loads.consumer(inputs.LambdaOverride);
+	evaluation.IgnitionLoad = loads.consumer(inputs.IgnitionOverride);
+	if (!diagnostics.consumers(inputs, mass, loads)) {
 		return fail(AirmassInjectionFault::Load);
 	}
 	evaluation.Airmass.Result = {mass, inputs.EffectiveMap.Valid ? inputs.EffectiveMap.Map : 0};
 	evaluation.Airmass.Valid = true;
+	evaluation.Degraded = diagnostics.degraded();
+	evaluation.Airmass.Degraded = evaluation.Degraded;
+	if (evaluation.Degraded) {
+		evaluation.Fault = fallback ? branchFault : diagnostics.fallbackFault();
+	}
 	diagnostics.finish(true);
 	return evaluation;
 }

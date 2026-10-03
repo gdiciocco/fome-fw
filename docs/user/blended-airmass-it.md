@@ -1,9 +1,16 @@
 # Guida operativa ai modelli aria e al blending SD + Alpha-N
 
-Questa guida descrive la configurazione corrente di Speed Density, Alpha-N,
+Questa guida documenta la revisione del 2026-09-30 di Speed Density, Alpha-N,
 MAF e del blending SD + Alpha-N in TunerStudio. I nomi tra virgolette sono le
 etichette inglesi dell'interfaccia. I nomi in `codice` identificano i parametri
 MSQ e i canali di log.
+
+Dal 2026-10-03 `capoworks` integra `feature/blended-airmass-pr` fino a
+`6d51a9003e`. La nuova logica include fallback dei modelli e recupero automatico
+sia standalone sia composito dopo una pubblicazione completa valida; non richiede
+riarmo e il priming segue i controlli di avviamento ordinari. Le descrizioni dei
+guasti, dei fallback e del riarmo riportate sotto sono storiche. Per il comportamento
+corrente consultare la [guida aggiornata](blended-airmass.md).
 
 Le mappe fornite come predefinite sono segnaposto. Prima di usare un modello sul
 motore occorre calibrarlo. Il firmware controlla assi, valori, sensori e risultati

@@ -34,14 +34,16 @@ or
 
 ### Breaking Changes
  - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
- - The calibration layout now includes dedicated airmass maps and independent load selectors. Back up the TunerStudio project, MSQ and matching INI before updating. Restore cells, both axes and controls manually with the new definition; old binary flash tunes are not migrated and no automatic MSQ converter is provided. Dedicated maps are always used; the main VE axis override and manual map-readiness switches are retired.
+ - The calibration format includes separate airmass maps and independent load selectors. Back up the project, MSQ and matching INI before updating; restore axes, cells and controls manually with the new definition. Existing binary tunes are not migrated.
 
 ### Added
  - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
  - Add `adc_stats` console diagnostics for fast ADC and software knock: conversion starts, completed buffers, skipped starts by reason, and ADC errors.
- - SD + Alpha-N mass blending with an 8 x 8 RPM/TPS authority table and separate 16 x 16 SD VE, Alpha-N reference-filling and standalone MAF correction maps. Every downstream table/control has an independent load source, including cylinder trims and knock gains. Explicit measured MAP and effective MAP remain distinct.
- - Shared Tcharge/IAT selection for SD and Alpha-N; optional standalone Alpha-N Multiply MAP; optional pure Alpha-N BARO/reference correction before blending. A general Use MAP estimate table permission controls fallback and subordinate transient estimation.
- - One Idle VE table with an independent load axis and a selected SD/Alpha-N owner in blending. VE Analyze can target a qualified whole-session uniform endpoint with Idle VE disabled; mixed contributions are excluded. Composite faults retain stopped-engine rearm, while standalone invalid calculations temporarily inhibit injection until valid publication.
+ - Dedicated Speed Density VE, Alpha-N filling and MAF correction maps retain independent calibrations. SD + Alpha-N combines cylinder air masses with a TPS/RPM contribution map and applies common VE corrections once. See the [capability and upstream comparison guide](../docs/user/blended-airmass.md).
+ - Independent load sources for fuel, ignition, protection and actuator functions allow each table to use its intended coordinate, with separate measured/effective MAP choices and matching diagnostic cursors. Load cursors clear when a physical-model calculation is invalidated.
+ - Selectable Tcharge or IAT, standalone Alpha-N MAP multiplication, optional Alpha-N barometric compensation, explicit MAP-estimate permission, and Idle VE ownership and load-source controls make the model's temperature, pressure and idle assumptions configurable.
+ - Validated fuel publication and atomic callback batches tie new injections to a complete current result. The SD/Alpha-N blend can recover on a healthy remaining model; temporary calculation failures recover automatically, and accepted pulse callbacks finish normally.
+ - TunerStudio exposes separate model editors, branch masses, contribution and fallback diagnostics. VE Analyze targets the active standalone map or a qualified whole-session blended endpoint; mixed contributions and enabled Idle VE exclude main-map analysis.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
@@ -60,11 +62,16 @@ or
 
 
 ### Changed
+ - First-cycle fuel, spark and protection preparation now avoids unrelated speedometer and actuator regulation work in the trigger callback; regular fast updates retain those controls.
  - Cylinder count is now derived automatically from the firing order instead of being a separate setting, so the two can no longer disagree.
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
- - SD logs use the full 32-bit data offset, allowing headers larger than 64 KiB without dropping telemetry fields.
+ - Lua calibration writes invalidate fuel calculated from the previous tune, including writes that do not advance the configuration version. Live airmass validation reuses unchanged calibration checks.
+ - Load cursors and per-cylinder fuel results are prepared before their atomic publication, reducing interrupt blocking. Invalid cylinder banks or fuel results clear fuel for every cylinder together.
+ - Disabled optional functions skip their table and load-cursor calculations, and their diagnostic cursors clear to zero. Knock retard still decays, and a latched lambda-protection cut retains its restore coordinate until the cut clears.
+ - STM32F429 builds with the expanded airmass calibration fit their RAM regions by placing USB packet buffers in ordinary SRAM on boards without Ethernet and the CAN console thread in CCM on Ethernet boards.
+ - SD binary logs encode the full 32-bit MLG data offset, including telemetry headers larger than 64 KiB.
  - Preserve a pending ignition discharge before reusing the same event after rapid synchronization loss/restart or trigger configuration changes. Skip the overlapping charge so it cannot lose its overdwell protection.
  - Use explicit trigger queue membership and tail pointers for constant-time insertion and unqueued-event cancellation
  - Prevent stale trigger-scheduled events and overdwell callbacks from interfering with newer ignition cycles after stop/restart or trigger reconfiguration; keep HPFP shutdown timers from restarting an old scheduling chain
@@ -74,8 +81,6 @@ or
  - MC33816 initialization now respects the selected SPI bus. VVT applies its cranking RPM limit without changing the saved calibration.
  - Prevent an ADC panic when fast ADC or software knock sampling overlaps the previous conversion's completion callback.
  - Flat 100% Alpha-N authority now stays exactly at the endpoint during RPM/TPS interpolation, preventing false composite configuration faults and unintended evaluation of the SD model.
- - Composite injection state and latched fault labels in TunerStudio now follow live output channels.
- - A failed start that never reports positive RPM now reaches the stopped state after trigger timeout, allowing explicit rearm of latched composite injection faults.
  - Injection scheduling now reserves every callback in a pulse before accepting it, so a full event queue cannot accept an injector opening without its matching close.
  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
  - ETB and DC wastegate outputs are inhibited during blocking calibration burns, and resume only after fresh sensor samples and a new control cycle #726

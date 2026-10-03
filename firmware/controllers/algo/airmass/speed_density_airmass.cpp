@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "speed_density_airmass.h"
 #include "idle_thread.h"
+#include "fuel_math.h"
 
 AirmassResult SpeedDensityAirmass::getAirmass(float rpm, bool postState) {
 	ScopePerf perf(PE::GetSpeedDensityFuel);
@@ -22,7 +23,7 @@ AirmassEvaluation SpeedDensityAirmass::getAirmassForFuel(float rpm) const {
 
 AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, const DiagnosticsTarget& diagnostics) const {
 	AirmassInputs inputs;
-	captureInputs(rpm, inputs);
+	captureInputs(rpm, inputs, diagnostics.live());
 	return evaluateAirmass(inputs, diagnostics);
 }
 
@@ -33,7 +34,7 @@ AirmassEvaluation SpeedDensityAirmass::evaluateAirmass(float rpm, float map, Air
 AirmassEvaluation
 SpeedDensityAirmass::evaluateAirmass(float rpm, float map, const DiagnosticsTarget& diagnostics) const {
 	AirmassInputs inputs;
-	captureAirmassInputs(rpm, inputs, nullptr, false);
+	captureAirmassInputs(rpm, inputs, nullptr, false, diagnostics.live());
 	inputs.EffectiveMap = {map, 0, false, std::isfinite(map) && map >= 0 && map <= 1000, false};
 	return evaluateAirmass(inputs, diagnostics);
 }
@@ -57,6 +58,7 @@ SpeedDensityAirmass::evaluateAirmass(AirmassInputs& inputs, const DiagnosticsTar
 			inputs.Displacement,
 			inputs.CylinderCount);
 	evaluation.Result = {mass, inputs.NativeLoad};
+	evaluation.Degraded = inputs.TemperatureFallback || inputs.EffectiveMap.Fallback || ve.Fallback;
 	evaluation.Valid = ve.Valid && std::isfinite(mass) && mass >= 0;
 	if (evaluation.Valid) {
 		evaluation.Valid = diagnostics.consumers(inputs, mass);
@@ -93,19 +95,29 @@ MapEvaluation SpeedDensityAirmass::evaluateMap(float rpm) const {
 	return inputs.EffectiveMap;
 }
 
-void captureAirmassInputs(float rpm, AirmassInputs& inputs, const ValueProvider3D* estimate, bool resolveMap) {
+static void resolveCapturedMapImpl(AirmassInputs& inputs, const ValueProvider3D* estimate, bool liveCalibration);
+
+void captureAirmassInputs(
+		float rpm, AirmassInputs& inputs, const ValueProvider3D* estimate, bool resolveMap, bool liveCalibration) {
 	{
 		chibios_rt::CriticalSectionLocker csl;
-		inputs.PublicationEpoch = engine->airmassInjectionState.publicationEpoch();
+		inputs.LiveCalibration = liveCalibration;
+		inputs.CalibrationGeneration = engine->airmassCalibration.Generation;
+		inputs.PublicationEpoch = engine->airmassInjectionState.locked(csl).publicationEpoch();
 		inputs.ConfigurationVersion = engine->getGlobalConfigurationVersion();
 		inputs.ActiveStrategy = engineConfiguration->fuelAlgorithm;
 		inputs.HasPublicationContext = true;
+		inputs.Displacement = engineConfiguration->displacement;
+		inputs.CylinderCount = engine->engineState.cylinderCount;
+		inputs.StandardAirCharge = liveCalibration ? getStandardAirCharge() : 0;
 	}
 	inputs.Rpm = rpm;
 	inputs.Tps = Sensor::get(SensorType::Tps1);
 	inputs.MeasuredMap = Sensor::get(SensorType::Map);
 	inputs.Iat = Sensor::get(SensorType::Iat);
 	inputs.Pedal = Sensor::get(SensorType::AcceleratorPedal);
+	inputs.TpsToleranceMin = engineConfiguration->tpsErrorDetectionTooLow;
+	inputs.TpsToleranceMax = engineConfiguration->tpsErrorDetectionTooHigh;
 	inputs.BarometricPressure = Sensor::get(SensorType::BarometricPressure);
 	inputs.BaroFromStartup = engineConfiguration->useFixedBaroCorrFromMap;
 	inputs.DriverThrottleIntent = Sensor::get(SensorType::DriverThrottleIntent);
@@ -113,6 +125,7 @@ void captureAirmassInputs(float rpm, AirmassInputs& inputs, const ValueProvider3
 	inputs.IdleActive = engine->module<IdleController>()->isIdlingOrTaper();
 #endif
 	inputs.TemperatureSource = config->airmassTemperatureSource;
+	inputs.TemperatureFallback = false;
 	// Tcharge is the existing rate-limited estimate from the previous estimator
 	// update. Its input fallbacks are preserved: absent CLT uses IAT; absent IAT
 	// contributes 0 C; both absent yield 0 C; invalid coefficient uses CLT.
@@ -130,57 +143,79 @@ void captureAirmassInputs(float rpm, AirmassInputs& inputs, const ValueProvider3
 			inputs.TemperatureK = 0;
 			inputs.TemperatureValid = false;
 	}
-	inputs.Displacement = engineConfiguration->displacement;
-	inputs.CylinderCount = engine->engineState.cylinderCount;
+	if (!inputs.TemperatureValid && (inputs.TemperatureSource == AirmassTemperatureSource::Tcharge ||
+									 inputs.TemperatureSource == AirmassTemperatureSource::Iat)) {
+		// Preserve the selected source for diagnostics, while using upstream's
+		// standard IAT fallback if neither the estimator nor IAT is usable.
+		const float iatK = inputs.Iat ? convertCelsiusToKelvin(inputs.Iat.Value) : 0;
+		inputs.TemperatureK = std::isfinite(iatK) && iatK > 0 ? iatK : 293.15f;
+		inputs.TemperatureValid = true;
+		inputs.TemperatureFallback = true;
+	}
 	inputs.PreviousFuelingLoad = getFuelingLoad();
 	inputs.PreviousIgnitionLoad = getIgnitionLoad();
 	inputs.LambdaOverride = engineConfiguration->afrOverrideMode;
 	inputs.IgnitionOverride = engineConfiguration->ignOverrideMode;
 	if (resolveMap) {
-		resolveCapturedMap(inputs, estimate);
+		resolveCapturedMapImpl(inputs, estimate, liveCalibration);
 	}
 }
 
-void resolveCapturedMap(AirmassInputs& inputs, const ValueProvider3D* estimate) {
+static void resolveCapturedMapImpl(AirmassInputs& inputs, const ValueProvider3D* estimate, bool liveCalibration) {
 	auto& map = inputs.EffectiveMap;
 	map = {};
 	map.Map = inputs.MeasuredMap.value_or(0);
 	const bool measuredValid = inputs.MeasuredMap.Valid && std::isfinite(map.Map) && map.Map >= 0 && map.Map <= 1000;
 	map.Valid = measuredValid;
+	map.Fallback = !measuredValid;
 	const bool transient = config->useMapEstimateTable && engineConfiguration->useMapEstimateDuringTransient &&
 						   engine->module<TpsAccelEnrichment>()->isAboveAccelThreshold;
 	if (!config->useMapEstimateTable || (measuredValid && !transient)) {
 		return;
 	}
-	map.Valid = false;
-	if (!std::isfinite(inputs.Rpm) || inputs.Rpm < 0 || !inputs.Tps || !std::isfinite(inputs.Tps.Value) ||
-		inputs.Tps.Value < 0 || inputs.Tps.Value > 100 || !isMapEstimateConfigurationValid()) {
+	if (!std::isfinite(inputs.Rpm) || inputs.Rpm < 0 ||
+		!(liveCalibration ? isCapturedAirmassCalibrationValid(inputs, AirmassCalibration::MapEstimate)
+						  : isMapEstimateConfigurationValid())) {
+		map.Fallback = true;
 		return;
 	}
-	map.FallbackMap = estimate ? estimate->getValue(inputs.Rpm, inputs.Tps.Value)
+	// Match upstream's TPS-zero estimate fallback without disguising the failed
+	// sensor in the shared snapshot used by Alpha-N and other consumers.
+	const auto normalizedTps = normalizeAirmassPercent(inputs, inputs.Tps);
+	const float estimateTps = normalizedTps.value_or(0);
+	map.FallbackMap = estimate ? estimate->getValue(inputs.Rpm, estimateTps)
 							   : interpolate3d(
 										 config->mapEstimateTable,
 										 config->mapEstimateTpsBins,
-										 inputs.Tps.Value,
+										 estimateTps,
 										 config->mapEstimateRpmBins,
 										 inputs.Rpm);
 	map.HasValue = true;
-	map.UsesEstimate = !measuredValid || (transient && map.Map < map.FallbackMap);
+	const bool estimateValid = std::isfinite(map.FallbackMap) && map.FallbackMap >= 0 && map.FallbackMap <= 600;
+	// A broken optional transient estimate must not discard a usable MAP sensor.
+	map.UsesEstimate = estimateValid && (!measuredValid || (transient && map.Map < map.FallbackMap));
 	map.Map = map.UsesEstimate ? map.FallbackMap : map.Map;
-	// Transient comparison requires a valid estimate even when measured MAP wins.
-	map.Valid = std::isfinite(map.FallbackMap) && map.FallbackMap >= 0 && map.FallbackMap <= 600 &&
-				std::isfinite(map.Map) && map.Map >= 0 && map.Map <= 1000;
+	map.Valid = measuredValid || estimateValid;
+	map.Fallback = !measuredValid || !estimateValid || !normalizedTps;
 }
 
-void SpeedDensityAirmass::captureInputs(float rpm, AirmassInputs& inputs) const {
-	captureAirmassInputs(rpm, inputs, m_mapEstimationTable);
+void resolveCapturedMap(AirmassInputs& inputs, const ValueProvider3D* estimate) {
+	resolveCapturedMapImpl(inputs, estimate, false);
+}
+
+void SpeedDensityAirmass::captureInputs(float rpm, AirmassInputs& inputs, bool liveCalibration) const {
+	captureAirmassInputs(rpm, inputs, m_mapEstimationTable, true, liveCalibration);
 }
 
 AirmassEvaluation
 SpeedDensityAirmass::evaluateRawAirmass(const AirmassInputs& inputs, RawAirmassDiagnostics* diagnostics) const {
+	return evaluateRawAirmassImpl(inputs, diagnostics, false);
+}
+
+AirmassEvaluation SpeedDensityAirmass::evaluateRawAirmassImpl(
+		const AirmassInputs& inputs, RawAirmassDiagnostics* diagnostics, bool liveCalibration) const {
 	if (diagnostics) {
-		diagnostics->HasValue = false;
-		diagnostics->Valid = false;
+		*diagnostics = {};
 	}
 	AirmassEvaluation evaluation;
 	if (!std::isfinite(inputs.Rpm) || inputs.Rpm <= 0 || !inputs.EffectiveMap.Valid ||
@@ -190,7 +225,7 @@ SpeedDensityAirmass::evaluateRawAirmass(const AirmassInputs& inputs, RawAirmassD
 		inputs.CylinderCount <= 0) {
 		return evaluation;
 	}
-	auto ve = evaluateRawVe(inputs, inputs.EffectiveMap.Map, diagnostics);
+	auto ve = evaluateRawVe(inputs, inputs.EffectiveMap.Map, diagnostics, liveCalibration);
 	const float mass = getAirmassImpl(
 			ve.Ve * PERCENT_DIV,
 			inputs.EffectiveMap.Map,
@@ -198,6 +233,7 @@ SpeedDensityAirmass::evaluateRawAirmass(const AirmassInputs& inputs, RawAirmassD
 			inputs.Displacement,
 			inputs.CylinderCount);
 	evaluation.Result = {mass, inputs.EffectiveMap.Map};
+	evaluation.Degraded = inputs.TemperatureFallback || inputs.EffectiveMap.Fallback || ve.Fallback;
 	evaluation.Valid = ve.Valid && std::isfinite(mass) && mass >= 0;
 	return evaluation;
 }
