@@ -67,6 +67,7 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - VE Analyze now exposes the RPM, coolant temperature, TPS rate, battery voltage, TPS and custom-expression filters for Speed Density and Alpha-N as well as MAF. Each map also retains its own lambda target-table choices. Speed Density additionally provides adjustable MAP minimum/maximum filters (default 0-1000 kPa) and TPS minimum/maximum filters (default 0-100%).
  - Lua calibration writes invalidate fuel calculated from the previous tune, including writes that do not advance the configuration version. Live airmass validation reuses unchanged calibration checks.
  - Load cursors and per-cylinder fuel results are prepared before their atomic publication, reducing interrupt blocking. Invalid cylinder banks or fuel results clear fuel for every cylinder together.
  - Disabled optional functions skip their table and load-cursor calculations, and their diagnostic cursors clear to zero. Knock retard still decays, and a latched lambda-protection cut retains its restore coordinate until the cut clears.
