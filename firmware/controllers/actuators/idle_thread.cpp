@@ -18,6 +18,10 @@
 
 #include "dc_motors.h"
 
+// The packed TunerStudio selector shares this word without moving existing calibration fields.
+static_assert(
+		offsetof(engine_configuration_s, verboseCanBaseAddress) - sizeof(uint32_t) == IDLE_TIMING_RPM_MODE_OFFSET);
+
 #if EFI_TUNER_STUDIO
 #include "stepper.h"
 #endif
@@ -375,9 +379,15 @@ void IdleController::onConfigurationChange(engine_configuration_s const* previou
 		m_pid.reset();
 	}
 #endif
-	if (!previousConfiguration ||
-		previousConfiguration->idleTimingUseCycleRpm != engineConfiguration->idleTimingUseCycleRpm ||
-		!m_timingPid.isSame(&previousConfiguration->idleTimingPid)) {
+	bool modeChanged = !previousConfiguration ||
+					   previousConfiguration->idleTimingUseCycleRpm != engineConfiguration->idleTimingUseCycleRpm ||
+					   previousConfiguration->idleTimingUseRollingRpm != engineConfiguration->idleTimingUseRollingRpm;
+#if EFI_SHAFT_POSITION_INPUT
+	if (modeChanged) {
+		engine->rpmCalculator.resetRollingCycleRpm();
+	}
+#endif
+	if (modeChanged || !m_timingPid.isSame(&previousConfiguration->idleTimingPid)) {
 		m_timingPid.reset();
 	}
 }

@@ -47,6 +47,7 @@ or
  - Cooling fans can be turned off above a set vehicle speed ("Disable above speed") #827
  - Flex fuel ethanol content is now correct immediately at startup, instead of ramping up from 0% over the first second while the sensor's filter settles. The last valid reading is stored in backup RAM, and used to prime the filter at startup as well as any time the sensor is failed - the fuel in the tank can't change while the ECU isn't watching. If no value was stored and the sensor is dead, the fallback is configurable: "Failed flex sensor ethanol content", defaulting to 50%.
  - Added gauges for EGT channels 3-8 in TunerStudio
+ - Idle ignition PID adds Rolling cycle feedback, observing a complete engine cycle while updating at every decoded trigger event. This rejects cyclic speed ripple without waiting for a fixed cycle boundary to react to load changes. The full-window delay remains; Instantaneous stays the default and existing Full cycle settings are preserved.
  - Idle ignition PID now offers selectable RPM feedback: Instantaneous remains the default, while Full cycle uses cycle-averaged speed and acceleration to reduce cylinder-dependent corrections from cyclic speed ripple. Full cycle responds more slowly to load changes and waits for a complete cycle after startup or restart; PID gains may need retuning.
 
 

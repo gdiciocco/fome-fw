@@ -85,7 +85,8 @@ TEST(idle_v2, timingPidResetsOnFeedbackModeChange) {
 	engineConfiguration->idleTimingPid.minValue = -10;
 	engineConfiguration->idleTimingPid.maxValue = 10;
 	dut.init();
-	for (bool useCycleRpm : {true, false}) {
+	for (auto [useCycleRpm, useRollingRpm] :
+		 {std::pair{true, false}, std::pair{false, true}, std::pair{false, false}}) {
 		float correction = 0;
 		for (int i = 0; i < 10; i++) {
 			correction = dut.getIdleTimingAdjustment(900, 0, 1000, ICP::Idling);
@@ -96,6 +97,7 @@ TEST(idle_v2, timingPidResetsOnFeedbackModeChange) {
 		dut.onConfigurationChange(&previousConfiguration);
 		EXPECT_EQ(dut.getIdleTimingAdjustment(1000, 0, 1000, ICP::Idling), correction);
 		engineConfiguration->idleTimingUseCycleRpm = useCycleRpm;
+		engineConfiguration->idleTimingUseRollingRpm = useRollingRpm;
 		dut.onConfigurationChange(&previousConfiguration);
 		EXPECT_EQ(dut.getIdleTimingAdjustment(1000, 0, 1000, ICP::Idling), 0);
 	}

@@ -88,6 +88,77 @@ void RpmCalculator::updateCycleRpm(float periodSeconds) {
 	m_cycleRpm = next;
 }
 
+RpmCalculator::CycleRpm RpmCalculator::getRollingCycleRpm() const {
+	chibios_rt::CriticalSectionLocker csl;
+	return m_rollingCycleRpm;
+}
+
+void RpmCalculator::resetRollingCycleRpm() {
+	chibios_rt::CriticalSectionLocker csl;
+	m_rollingCycleRpm = {};
+	m_rollingHistoryCount = 0;
+	m_rollingNextIndex = UINT32_MAX;
+}
+
+#if EFI_SHAFT_POSITION_INPUT
+void RpmCalculator::updateRollingCycleRpm(uint32_t index, const EnginePhaseInfo& phaseInfo) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (!engineConfiguration->idleTimingUseRollingRpm || engineConfiguration->idleTimingUseCycleRpm) {
+		// No per-tooth calculations in the existing modes. Invalidate history when deselected.
+		if (m_rollingHistoryCount != 0) {
+			resetRollingCycleRpm();
+		}
+		return;
+	}
+
+	auto& tc = engine->triggerCentral;
+	auto eventCount = tc.engineCycleEventCount;
+	if (eventCount == 0 || eventCount > efi::size(tc.instantRpm.timeOfLastEvent) || index >= eventCount) {
+		resetRollingCycleRpm();
+		return;
+	}
+
+	if ((m_rollingNextIndex != UINT32_MAX && index != m_rollingNextIndex) ||
+		m_rollingShapeVersion != tc.triggerShape.version ||
+		m_rollingCamResyncCounter != tc.triggerState.m_camResyncCounter) {
+		// A phase discontinuity cannot be compared to timestamps from the previous phase mapping.
+		resetRollingCycleRpm();
+	}
+	m_rollingShapeVersion = tc.triggerShape.version;
+	m_rollingCamResyncCounter = tc.triggerState.m_camResyncCounter;
+
+	uint32_t now = phaseInfo.timestamp;
+	if (m_rollingHistoryCount >= eventCount) {
+		// The same decoded index one cycle ago gives an exact full-angle window even on
+		// irregular or missing-tooth patterns. A full traversal excludes pre-sync history.
+		uint32_t elapsed = now - tc.instantRpm.timeOfLastEvent[index];
+		float rpm = elapsed != 0 ? 60.0f * (getEngineCycle(getOperationMode()) / 360) * NT_PER_SECOND / elapsed : 0;
+		if (!(rpm > 0 && rpm <= MAX_ALLOWED_RPM)) {
+			resetRollingCycleRpm();
+			return;
+		}
+		uint32_t dt = now - m_rollingLastTime;
+		float rate = m_rollingCycleRpm.rpmRate;
+		if (m_rollingCycleRpm.rpm == 0) {
+			rate = 0;
+		} else if (dt != 0) {
+			rate = (rpm - m_rollingCycleRpm.rpm) * NT_PER_SECOND / dt;
+		}
+		m_rollingCycleRpm = {rpm, rate};
+	}
+	m_rollingLastTime = now;
+
+	// Rising-only decoding leaves every other index unused.
+	uint32_t step = tc.triggerShape.useOnlyRisingEdges ? 2 : 1;
+	m_rollingHistoryCount = std::min(m_rollingHistoryCount + step, eventCount);
+	m_rollingNextIndex = index + step;
+	if (m_rollingNextIndex >= eventCount) {
+		m_rollingNextIndex -= eventCount;
+	}
+}
+
+#endif // EFI_SHAFT_POSITION_INPUT
+
 operation_mode_e lookupOperationMode() {
 	if (engineConfiguration->twoStroke) {
 		return TWO_STROKE;
@@ -259,6 +330,7 @@ void RpmCalculator::setStopSpinning() {
 	{
 		chibios_rt::CriticalSectionLocker csl;
 		m_cycleRpm = {};
+		resetRollingCycleRpm();
 	}
 
 	if (cachedRpmValue != 0) {
@@ -334,6 +406,9 @@ void rpmShaftPositionCallback(uint32_t trgEventIndex, const EnginePhaseInfo& pha
 
 		rpmState.onNewEngineCycle();
 	}
+
+	// Consume the previous cycle timestamp before instant RPM overwrites it.
+	rpmState.updateRollingCycleRpm(trgEventIndex, phaseInfo);
 
 	// Always update instant RPM even when not spinning up
 	tc.instantRpm.updateInstantRpm(tc.triggerShape, &tc.triggerFormDetails, trgEventIndex, phaseInfo);

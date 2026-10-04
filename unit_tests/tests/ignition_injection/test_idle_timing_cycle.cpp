@@ -17,10 +17,13 @@ struct IdleTimingResult {
 };
 
 // Constant 100 ms engine cycles with cyclic speed ripple, independently of ECU RPM estimates.
-IdleTimingResult runIdleTimingRipple(int fastPhaseUs, double ripplePhase, bool useCycleRpm = false) {
+IdleTimingResult
+runIdleTimingRipple(int fastPhaseUs, double ripplePhase, bool useCycleRpm = false, bool useRollingRpm = false) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	EXPECT_FALSE(engineConfiguration->idleTimingUseCycleRpm);
 	engineConfiguration->idleTimingUseCycleRpm = useCycleRpm;
+	EXPECT_FALSE(engineConfiguration->idleTimingUseRollingRpm);
+	engineConfiguration->idleTimingUseRollingRpm = useRollingRpm;
 	setCylinderCount(2);
 	engineConfiguration->timing_offset_cylinder[1] = -60;
 	engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
@@ -138,6 +141,26 @@ TEST(idleTiming, constantCycleSpeedRejectsCyclicRipple) {
 				   result.maxCorrection,
 				   result.minRpm,
 				   result.maxRpm);
+		}
+	}
+}
+
+TEST(idleTiming, rollingCycleRejectsCyclicRipple) {
+	for (double ripplePhase : {0.0, 360.0}) {
+		for (int fastPhaseUs : {0, 1000, 2000, 3000}) {
+			SCOPED_TRACE(::testing::Message() << "ripple phase=" << ripplePhase << ", fast phase=" << fastPhaseUs);
+			auto result = runIdleTimingRipple(fastPhaseUs, ripplePhase, false, true);
+			EXPECT_GT(result.maxRpm - result.minRpm, 300);
+			EXPECT_NEAR(result.maxCorrection, 0, 0.02);
+			EXPECT_NEAR(result.advance[0], 10, 1);
+			EXPECT_NEAR(result.advance[1], 10, 1);
+			EXPECT_NEAR(result.advance[0] - result.advance[1], 0, 1);
+			EXPECT_EQ(result.overdwell, 0);
+			printf("ROLLING_TIMING fast=%d phi=%.0f diff=%.4f maxCorrection=%.4f\n",
+				   fastPhaseUs,
+				   ripplePhase,
+				   result.advance[0] - result.advance[1],
+				   result.maxCorrection);
 		}
 	}
 }

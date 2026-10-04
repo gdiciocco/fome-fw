@@ -126,9 +126,11 @@ void IgnitionState::updateAdvanceCorrections(float engineLoad) {
 	}
 
 #if EFI_SHAFT_POSITION_INPUT && EFI_IDLE_CONTROL
-	if (engineConfiguration->idleTimingUseCycleRpm) {
-		// Full-cycle feedback rejects combustion ripple at the cost of slower load response.
-		auto cycle = engine->rpmCalculator.getCycleRpm();
+	// Invalid packed mode 3 falls back to the default instantaneous feedback.
+	if (engineConfiguration->idleTimingUseCycleRpm != engineConfiguration->idleTimingUseRollingRpm) {
+		// Both modes observe a whole cycle; rolling feedback updates at each decoded event.
+		auto cycle = engineConfiguration->idleTimingUseRollingRpm ? engine->rpmCalculator.getRollingCycleRpm()
+																  : engine->rpmCalculator.getCycleRpm();
 		timingPidCorrection =
 				cycle.rpm > 0 ? engine->module<IdleController>()->getIdleTimingAdjustment(cycle.rpm, cycle.rpmRate) : 0;
 	} else {

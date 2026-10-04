@@ -96,6 +96,12 @@ public:
 	// Zero until a complete cycle has been measured, and after an engine stop.
 	CycleRpm getCycleRpm() const;
 	void updateCycleRpm(float periodSeconds);
+
+	// A complete engine-cycle window, updated at each decoded trigger event.
+	// Reuses the instantaneous RPM tooth timestamps before they are overwritten.
+	CycleRpm getRollingCycleRpm() const;
+	void updateRollingCycleRpm(uint32_t index, const EnginePhaseInfo& phaseInfo);
+	void resetRollingCycleRpm();
 	/**
 	 * This method is invoked once per engine cycle right after we calculate new RPM value
 	 */
@@ -152,6 +158,12 @@ private:
 	 */
 	float cachedRpmValue = 0;
 	CycleRpm m_cycleRpm;
+	CycleRpm m_rollingCycleRpm;
+	uint32_t m_rollingLastTime = 0;
+	uint32_t m_rollingNextIndex = UINT32_MAX;
+	uint32_t m_rollingHistoryCount = 0;
+	int m_rollingShapeVersion = -1;
+	uint8_t m_rollingCamResyncCounter = 0;
 
 	/**
 	 * This counter is incremented with each revolution of one of the shafts. Could be
