@@ -468,7 +468,18 @@ static void updateFuelInfo() {
 
 	const auto& wallFuel = engine->injectionEvents.elements[0].getWallFuel();
 	engine->outputChannels.wallFuelAmount = wallFuel.getWallFuel() * 1000;				 // Convert grams to mg
-	engine->outputChannels.wallFuelCorrectionValue = wallFuel.wallFuelCorrection * 1000; // Convert grams to mg
+	// A disabled model retains its internal history, but has no current correction.
+	engine->outputChannels.wallFuelCorrectionValue =
+			engine->module<WallFuelController>()->getEnable() ? wallFuel.wallFuelCorrection * 1000 : 0; // grams to mg
+
+	// Publish ECU time, independent of TunerStudio edition, playback speed or reconnects.
+	engine->outputChannels.veAnalyzeIsCranking = engine->rpmCalculator.isCranking();
+	const float timeSinceCut = std::min(
+			engine->module<DfcoController>()->getTimeSinceCut(), engine->module<LimpManager>()->getTimeSinceAnyCut());
+	engine->outputChannels.veAnalyzeTimeSinceCut = clampF(0, timeSinceCut, 655.35f);
+	static_assert(offsetof(TunerStudioOutputChannels, veAnalyzeIsCranking) == 235);
+	static_assert(offsetof(TunerStudioOutputChannels, veAnalyzeTimeSinceCut) == 238);
+	static_assert(offsetof(TunerStudioOutputChannels, seconds) == 240);
 
 	engine->outputChannels.veValue = engine->engineState.currentVe;
 }

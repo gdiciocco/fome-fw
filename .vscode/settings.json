@@ -35,4 +35,5 @@
 	"java.import.exclusions": [
 		"**/java_console/luaformatter/**"
 	],
+	"java.compile.nullAnalysis.mode": "automatic",
 }

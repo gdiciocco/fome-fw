@@ -495,14 +495,17 @@ struct output_channels_s {
 	// Idle: Stepper target position
 	// offset 234
 	uint8_t idleStepperTargetPosition = (uint8_t)0;
+	// VE Analyze: Cranking
 	// offset 235
-	uint8_t alignmentFill_at_235[1];
+	uint8_t veAnalyzeIsCranking = (uint8_t)0;
 	// Ign: Coil duty cycle
 	// %
 	// offset 236
 	scaled_channel<uint16_t, 100, 1> coilDutyCycle = (uint16_t)0;
+	// VE Analyze: Time since fuel/spark cut or DFCO
+	// s
 	// offset 238
-	uint8_t alignmentFill_at_238[2];
+	scaled_channel<uint16_t, 100, 1> veAnalyzeTimeSinceCut = (uint16_t)0;
 	// Uptime
 	// sec
 	// offset 240
@@ -853,8 +856,121 @@ struct output_channels_s {
 	// s
 	// offset 586
 	uint16_t empPumpSaturationSeconds = (uint16_t)0;
+	// Air blend: SD raw mass
+	// mg
+	// offset 588
+	float blendedSdMass = (float)0;
+	// Air blend: Alpha-N raw mass
+	// mg
+	// offset 592
+	float blendedAlphaNMass = (float)0;
+	// Air blend: Requested Alpha-N
+	// %
+	// offset 596
+	scaled_channel<uint16_t, 100, 1> blendedRequestedAuthority = (uint16_t)0;
+	// Air blend: Effective Alpha-N
+	// %
+	// offset 598
+	scaled_channel<uint16_t, 100, 1> blendedEffectiveAuthority = (uint16_t)0;
+	// Air blend: SD load
+	// kPa
+	// offset 600
+	scaled_channel<uint16_t, 10, 1> blendedSdLoad = (uint16_t)0;
+	// Air blend: Alpha-N load
+	// % TPS
+	// offset 602
+	scaled_channel<uint16_t, 100, 1> blendedAlphaNLoad = (uint16_t)0;
+	// Air blend: SD VE
+	// %
+	// offset 604
+	scaled_channel<uint16_t, 10, 1> blendedSdVe = (uint16_t)0;
+	// Air blend: Alpha-N filling
+	// %
+	// offset 606
+	scaled_channel<uint16_t, 10, 1> blendedAlphaNVe = (uint16_t)0;
+	// Air blend: Common multiplier
+	// offset 608
+	float blendedCorrection = (float)0;
+	// Air blend: Injection state
+	// code
+	// offset 612
+	uint8_t blendedStatus = (uint8_t)0;
+	// Air blend: Current fault or fallback
+	// code
+	// offset 613
+	uint8_t blendedFault = (uint8_t)0;
+	// Air blend: Calculation flags
+	// bits
+	// offset 614
+	uint16_t blendedFlags = (uint16_t)0;
+	// Air blend: Lambda load
+	// offset 616
+	float blendedLambdaLoad = (float)0;
+	// Airmass: Temperature used
+	// C
+	// offset 620
+	float airmassTemperature = (float)0;
+	// Airmass: Temperature source
+	// code
+	// offset 624
+	uint8_t airmassTemperatureSourceUsed = (uint8_t)0;
+	// offset 625
+	uint8_t alignmentFill_at_625[3];
+	// Alpha-N: BARO coefficient
+	// offset 628
+	float alphaNBaroCoefficient = (float)0;
+	// Airmass: Pressure provenance
+	// bits
+	// offset 632
+	uint8_t airmassPressureFlags = (uint8_t)0;
+	// Air blend: Qualified analyze endpoint
+	// code
+	// offset 633
+	uint8_t blendedVeAnalyzeEndpoint = (uint8_t)0;
+	// Load: injectionPhase
+	// offset 634
+	scaled_channel<int16_t, 10, 1> injectionPhaseLoad = (int16_t)0;
+	// Load: fuelTrim
+	// offset 636
+	scaled_channel<int16_t, 10, 1> fuelTrimLoad[12];
+	// Load: ignitionTrim
+	// offset 660
+	scaled_channel<int16_t, 10, 1> ignitionTrimLoad[12];
+	// Load: stft
+	// offset 684
+	scaled_channel<int16_t, 10, 1> stftLoad = (int16_t)0;
+	// Load: staging
+	// offset 686
+	scaled_channel<int16_t, 10, 1> stagingLoad = (int16_t)0;
+	// Load: lambdaDeviation
+	// offset 688
+	scaled_channel<int16_t, 10, 1> lambdaDeviationLoad = (int16_t)0;
+	// Load: lambdaMonitor
+	// offset 690
+	scaled_channel<int16_t, 10, 1> lambdaMonitorLoad = (int16_t)0;
+	// Load: trailingSpark
+	// offset 692
+	scaled_channel<int16_t, 10, 1> trailingSparkLoad = (int16_t)0;
+	// Load: ignitionIat
+	// offset 694
+	scaled_channel<int16_t, 10, 1> ignitionIatLoad = (int16_t)0;
+	// Load: knockRetard
+	// offset 696
+	scaled_channel<int16_t, 10, 1> knockRetardLoad = (int16_t)0;
+	// Load: knockGain
+	// offset 698
+	scaled_channel<int16_t, 10, 1> knockGainLoad[12];
+	// Load: hpfpTarget
+	// offset 722
+	scaled_channel<int16_t, 10, 1> hpfpTargetLoad = (int16_t)0;
+	// Boost correction X
+	// offset 724
+	int16_t boostOpenLoopBlendXAxisValue[2];
+	// Boost correction X
+	// offset 728
+	int16_t boostClosedLoopBlendXAxisValue[2];
 };
-static_assert(sizeof(output_channels_s) == 588);
+static_assert(sizeof(output_channels_s) == 732);
 static_assert(offsetof(output_channels_s, RPMValue) == 4);
 static_assert(offsetof(output_channels_s, rpmAcceleration) == 6);
 static_assert(offsetof(output_channels_s, coolant) == 8);
@@ -963,7 +1079,9 @@ static_assert(offsetof(output_channels_s, ignitionAdvance) == 230);
 static_assert(offsetof(output_channels_s, currentIgnitionMode) == 232);
 static_assert(offsetof(output_channels_s, currentInjectionMode) == 233);
 static_assert(offsetof(output_channels_s, idleStepperTargetPosition) == 234);
+static_assert(offsetof(output_channels_s, veAnalyzeIsCranking) == 235);
 static_assert(offsetof(output_channels_s, coilDutyCycle) == 236);
+static_assert(offsetof(output_channels_s, veAnalyzeTimeSinceCut) == 238);
 static_assert(offsetof(output_channels_s, seconds) == 240);
 static_assert(offsetof(output_channels_s, firmwareVersion) == 244);
 static_assert(offsetof(output_channels_s, accelerationLat) == 248);
@@ -1042,3 +1160,35 @@ static_assert(offsetof(output_channels_s, empPumpFeedForward) == 580);
 static_assert(offsetof(output_channels_s, empPumpPiCorrection) == 582);
 static_assert(offsetof(output_channels_s, empPumpCoolingDemand) == 584);
 static_assert(offsetof(output_channels_s, empPumpSaturationSeconds) == 586);
+static_assert(offsetof(output_channels_s, blendedSdMass) == 588);
+static_assert(offsetof(output_channels_s, blendedAlphaNMass) == 592);
+static_assert(offsetof(output_channels_s, blendedRequestedAuthority) == 596);
+static_assert(offsetof(output_channels_s, blendedEffectiveAuthority) == 598);
+static_assert(offsetof(output_channels_s, blendedSdLoad) == 600);
+static_assert(offsetof(output_channels_s, blendedAlphaNLoad) == 602);
+static_assert(offsetof(output_channels_s, blendedSdVe) == 604);
+static_assert(offsetof(output_channels_s, blendedAlphaNVe) == 606);
+static_assert(offsetof(output_channels_s, blendedCorrection) == 608);
+static_assert(offsetof(output_channels_s, blendedStatus) == 612);
+static_assert(offsetof(output_channels_s, blendedFault) == 613);
+static_assert(offsetof(output_channels_s, blendedFlags) == 614);
+static_assert(offsetof(output_channels_s, blendedLambdaLoad) == 616);
+static_assert(offsetof(output_channels_s, airmassTemperature) == 620);
+static_assert(offsetof(output_channels_s, airmassTemperatureSourceUsed) == 624);
+static_assert(offsetof(output_channels_s, alphaNBaroCoefficient) == 628);
+static_assert(offsetof(output_channels_s, airmassPressureFlags) == 632);
+static_assert(offsetof(output_channels_s, blendedVeAnalyzeEndpoint) == 633);
+static_assert(offsetof(output_channels_s, injectionPhaseLoad) == 634);
+static_assert(offsetof(output_channels_s, fuelTrimLoad) == 636);
+static_assert(offsetof(output_channels_s, ignitionTrimLoad) == 660);
+static_assert(offsetof(output_channels_s, stftLoad) == 684);
+static_assert(offsetof(output_channels_s, stagingLoad) == 686);
+static_assert(offsetof(output_channels_s, lambdaDeviationLoad) == 688);
+static_assert(offsetof(output_channels_s, lambdaMonitorLoad) == 690);
+static_assert(offsetof(output_channels_s, trailingSparkLoad) == 692);
+static_assert(offsetof(output_channels_s, ignitionIatLoad) == 694);
+static_assert(offsetof(output_channels_s, knockRetardLoad) == 696);
+static_assert(offsetof(output_channels_s, knockGainLoad) == 698);
+static_assert(offsetof(output_channels_s, hpfpTargetLoad) == 722);
+static_assert(offsetof(output_channels_s, boostOpenLoopBlendXAxisValue) == 724);
+static_assert(offsetof(output_channels_s, boostClosedLoopBlendXAxisValue) == 728);

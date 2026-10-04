@@ -1,3 +1,12 @@
+constexpr inline const char* getAirmassTemperatureSource(AirmassTemperatureSource value) {
+	switch (value) {
+		case AirmassTemperatureSource::Iat:
+			return "Iat";
+		case AirmassTemperatureSource::Tcharge:
+			return "Tcharge";
+	}
+	return "unknown";
+}
 constexpr inline const char* getDtcSeverity(DtcSeverity value) {
 	switch (value) {
 		case DtcSeverity::Ignore:
@@ -19,6 +28,28 @@ constexpr inline const char* getGearControllerMode(GearControllerMode value) {
 			return "Generic";
 		case GearControllerMode::None:
 			return "None";
+	}
+	return "unknown";
+}
+constexpr inline const char* getIdleVeLoadSource(IdleVeLoadSource value) {
+	switch (value) {
+		case IdleVeLoadSource::EffectiveMap:
+			return "EffectiveMap";
+		case IdleVeLoadSource::MeasuredMap:
+			return "MeasuredMap";
+		case IdleVeLoadSource::ModelDefault:
+			return "ModelDefault";
+		case IdleVeLoadSource::Tps:
+			return "Tps";
+	}
+	return "unknown";
+}
+constexpr inline const char* getIdleVeModel(IdleVeModel value) {
+	switch (value) {
+		case IdleVeModel::AlphaN:
+			return "AlphaN";
+		case IdleVeModel::SpeedDensity:
+			return "SpeedDensity";
 	}
 	return "unknown";
 }
@@ -337,6 +368,8 @@ constexpr inline const char* getEngine_load_mode_e(engine_load_mode_e value) {
 			return "LM_MOCK";
 		case LM_REAL_MAF:
 			return "LM_REAL_MAF";
+		case LM_SD_ALPHA_N:
+			return "LM_SD_ALPHA_N";
 		case LM_SPEED_DENSITY:
 			return "LM_SPEED_DENSITY";
 	}
@@ -394,6 +427,8 @@ constexpr inline const char* getGppwm_channel_e(gppwm_channel_e value) {
 			return "GPPWM_Clt";
 		case GPPWM_DetectedGear:
 			return "GPPWM_DetectedGear";
+		case GPPWM_EffectiveMap:
+			return "GPPWM_EffectiveMap";
 		case GPPWM_Egt1:
 			return "GPPWM_Egt1";
 		case GPPWM_Egt2:
@@ -558,6 +593,8 @@ constexpr inline const char* getLoad_override_e(load_override_e value) {
 			return "AFR_AccPedal";
 		case AFR_CylFilling:
 			return "AFR_CylFilling";
+		case AFR_EffectiveMAP:
+			return "AFR_EffectiveMAP";
 		case AFR_MAP:
 			return "AFR_MAP";
 		case AFR_None:
