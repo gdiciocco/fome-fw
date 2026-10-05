@@ -118,6 +118,14 @@ float TorqueModel::driverDemand() const {
 			config->driverTorqueTable, config->driverTorquePedalBins, pedal, config->driverTorqueRpmBins, rpm);
 }
 
+void TorqueModel::onConfigurationChange(engine_configuration_s const* previousConfiguration) {
+	if (!previousConfiguration ||
+		previousConfiguration->rollingCycleRpmAsInstantRpm != engineConfiguration->rollingCycleRpmAsInstantRpm) {
+		m_idleTorquePid.reset();
+		m_idleGovernorTorque = 0;
+	}
+}
+
 expected<float> TorqueModel::idleDemand(float driverDemand) {
 #if EFI_IDLE_CONTROL
 	// Bind the PID to its config on first use / after a config change (mirrors the IAC idle reset).

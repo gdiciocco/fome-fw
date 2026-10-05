@@ -50,6 +50,7 @@ private:
 
 class TorqueModel : public TorqueModelBase {
 public:
+	void onConfigurationChange(engine_configuration_s const* previousConfiguration) override;
 	float driverDemand() const override;
 	expected<float> idleDemand(float driverDemand) override;
 	float getTorqueLoss() override;

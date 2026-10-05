@@ -791,6 +791,9 @@ static void resetRunningTriggerCounters() {
 }
 
 void onConfigurationChangeTriggerCallback() {
+	if (isConfigurationChanged(rollingCycleRpmAsInstantRpm)) {
+		engine->rpmCalculator.resetRollingCycleRpm();
+	}
 	static_assert(
 			std::extent<decltype(engine_configuration_s::camInputs)>::value ==
 			std::extent<decltype(engine_configuration_s::vvtOffsets)>::value);
@@ -864,6 +867,7 @@ static void calculateTriggerSynchPoint(
 TriggerDecoderBase initState("init");
 
 void TriggerCentral::updateWaveform() {
+	engine->rpmCalculator.resetRollingCycleRpm();
 	// Re-read config in case it's changed
 	primaryTriggerConfiguration.update();
 	for (int camIndex = 0; camIndex < CAMS_PER_BANK; camIndex++) {

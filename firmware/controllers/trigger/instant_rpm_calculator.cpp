@@ -107,6 +107,20 @@ void InstantRpmCalculator::updateInstantRpm(
 	// Record the time of this event so we can calculate RPM from it later
 	timeOfLastEvent[index] = nowNt32;
 
+	if (engineConfiguration->rollingCycleRpmAsInstantRpm) {
+		auto rolling = engine->rpmCalculator.getRollingCycleRpm();
+		if (rolling.rpm > 0) {
+			// Publish once per tooth: every existing Instant RPM consumer uses the same
+			// value without repeating the rolling conversions in its own callback.
+			m_instantRpm = rolling.rpm;
+			m_rollingCycleRpmRate = rolling.rpmRate;
+			m_usingRollingCycleRpm = true;
+			updateCylinderContribution(triggerShape, triggerFormDetails, index, nowNt32, phaseInfo);
+			return;
+		}
+	}
+	resetRollingCycleRpm();
+
 	auto instantRpm =
 			calculateInstantRpm(triggerShape, triggerFormDetails, index, nowNt32, engineConfiguration->instantRpmRange);
 	if (instantRpm) {

@@ -809,3 +809,30 @@ TEST(TorqueModelLoss, SupportsNegativeLoss) {
 
 	EXPECT_NEAR(tm.getTorqueLoss(), -15, 0.1);
 }
+
+TEST(TorqueModelIdle, GlobalRollingModeChangeResetsGovernorIntegrator) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	auto& torque = engine->module<TorqueModel>().unmock();
+	engineConfiguration->torqueModel.idlePid = {};
+	engineConfiguration->torqueModel.idlePid.iFactor = 1;
+	engineConfiguration->torqueModel.idlePid.minValue = -50;
+	engineConfiguration->torqueModel.idlePid.maxValue = 50;
+	MockIdleTargetController target;
+	mockIdlePhase(target, 1000, IIdleController::Phase::Idling);
+	for (bool globallyRolling : {true, false}) {
+		engine->triggerCentral.instantRpm.m_instantRpm = 900;
+		for (int i = 0; i < 10; i++) {
+			torque.idleDemand(-100);
+		}
+		engine->triggerCentral.instantRpm.m_instantRpm = 1000;
+		EXPECT_GT(torque.idleDemand(-100).value_or(-1234), 0);
+		auto previous = *engineConfiguration;
+		// Other calibration edits preserve the governor's accumulated correction.
+		torque.onConfigurationChange(&previous);
+		EXPECT_GT(torque.idleDemand(-100).value_or(-1234), 0);
+		engineConfiguration->rollingCycleRpmAsInstantRpm = globallyRolling;
+		torque.onConfigurationChange(&previous);
+		EXPECT_EQ(torque.idleDemand(-100).value_or(-1234), 0);
+	}
+	engine->engineModules.get<IdleTargetController>().set(nullptr);
+}

@@ -378,6 +378,7 @@ void IdleController::onSynchronousFastCallback() {
 
 void IdleController::onEngineStop() {
 	m_pid.reset();
+	m_timingPid.reset();
 }
 
 void IdleController::onConfigurationChange(engine_configuration_s const* previousConfiguration) {
@@ -386,6 +387,21 @@ void IdleController::onConfigurationChange(engine_configuration_s const* previou
 		m_pid.reset();
 	}
 #endif
+	bool globalModeChanged = !previousConfiguration || previousConfiguration->rollingCycleRpmAsInstantRpm !=
+															   engineConfiguration->rollingCycleRpmAsInstantRpm;
+	bool modeChanged = globalModeChanged ||
+					   previousConfiguration->idleTimingUseRollingRpm != engineConfiguration->idleTimingUseRollingRpm;
+	if (globalModeChanged) {
+		m_pid.reset();
+	}
+#if EFI_SHAFT_POSITION_INPUT
+	if (modeChanged) {
+		engine->rpmCalculator.resetRollingCycleRpm();
+	}
+#endif
+	if (modeChanged || !m_timingPid.isSame(&previousConfiguration->idleTimingPid)) {
+		m_timingPid.reset();
+	}
 }
 
 void IdleController::init() {

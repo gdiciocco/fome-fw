@@ -34,6 +34,8 @@ TESTS_SRC_CPP = \
 	tests/ignition_injection/test_startOfCrankingPrimingPulse.cpp \
 	tests/ignition_injection/test_multispark.cpp \
 	tests/ignition_injection/test_ignition_scheduling.cpp \
+	tests/ignition_injection/test_idle_timing_ripple.cpp \
+	tests/ignition_injection/test_idle_timing_rolling.cpp \
 	tests/ignition_injection/test_fuelCut.cpp \
 	tests/ignition_injection/test_dfco_startup.cpp \
 	tests/ignition_injection/test_fuel_computer.cpp \

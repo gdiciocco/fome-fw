@@ -84,6 +84,7 @@ or
  - Prevent an ADC panic when fast ADC or software knock sampling overlaps the previous conversion's completion callback.
  - Flat 100% Alpha-N authority now stays exactly at the endpoint during RPM/TPS interpolation, preventing false composite configuration faults and unintended evaluation of the SD model.
  - Injection scheduling now reserves every callback in a pulse before accepting it, so a full event queue cannot accept an injector opening without its matching close.
+ - Add optional rolling engine-cycle RPM feedback to prevent cyclic speed ripple from biasing idle ignition timing between cylinders. Instantaneous feedback remains the default. Capoworks also offers a global override that publishes rolling RPM and its derivative to all Instant RPM consumers, with instantaneous fallback during startup and resynchronization. PID gains may need retuning.
  - Changing or clearing the MAP 2, MAF, MAF 2 or fuel level sensor input no longer leaves the sensor reading its old pin (and the pin claimed) until the ECU is rebooted. MAF and fuel level input changes now take effect immediately, like other analog sensors
  - ETB and DC wastegate outputs are inhibited during blocking calibration burns, and resume only after fresh sensor samples and a new control cycle #726
  - Calibration burns now verify the stored bytes and CRC before replacing the remaining valid copy; failed writes keep the burn pending and require a new request to retry

@@ -11,6 +11,22 @@ public:
 		return m_instantRpm;
 	}
 
+	bool isUsingRollingCycleRpm() const {
+		return m_usingRollingCycleRpm;
+	}
+
+	float getRollingCycleRpmRate() const {
+		return m_rollingCycleRpmRate;
+	}
+
+	void resetRollingCycleRpm() {
+		if (m_usingRollingCycleRpm) {
+			m_instantRpm = 0;
+		}
+		m_usingRollingCycleRpm = false;
+		m_rollingCycleRpmRate = 0;
+	}
+
 #if EFI_ENGINE_CONTROL && EFI_SHAFT_POSITION_INPUT
 	void updateInstantRpm(
 			TriggerWaveform const& triggerShape,
@@ -27,6 +43,7 @@ public:
 	void movePreSynchTimestamps();
 
 	void resetInstantRpm() {
+		resetRollingCycleRpm();
 		setArrayValues(timeOfLastEvent, 0);
 		spinningEventIndex = 0;
 		m_instantRpm = 0;
@@ -42,6 +59,9 @@ public:
 	float m_instantRpm = 0;
 
 private:
+	bool m_usingRollingCycleRpm = false;
+	float m_rollingCycleRpmRate = 0;
+
 	expected<float> calculateInstantRpm(
 			TriggerWaveform const& triggerShape,
 			TriggerFormDetails* triggerFormDetails,
