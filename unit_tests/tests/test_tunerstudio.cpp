@@ -36,7 +36,7 @@ TEST(VeAnalyzeTelemetry, cutRecoveryAndSaturation) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 	engine->rpmCalculator.setRpmValue(1500);
 	Sensor::setMockValue(SensorType::Rpm, 1500);
-	auto limp = engine->module<LimpManager>();
+	auto& limp = engine->module<LimpManager>();
 	advanceTimeUs(10e6);
 	// A transient Lua spark cut exercises the same ECU recovery timer as limiter cuts.
 	engine->engineState.lua.luaIgnCut = true;
