@@ -152,7 +152,8 @@ TEST(TriggerScheduler, oldOverdwellPreservesRequeuedSparkAndDischargesCoil) {
 	int newCount = 0;
 	IgnitionContext oldContext;
 	oldContext.eventIndex = 0;
-	oldContext.outputsMask = 1;
+	ignition.outputMaskSnapshot = 1;
+	ignition.state = IgnitionOccurrenceState::Charging;
 	oldContext.isOverdwellProtect = true;
 
 	scheduler.schedule(&event, EngPhase{123}, {countAction, &newCount});
@@ -371,6 +372,7 @@ TEST(TriggerScheduler, overdwellRemovesPendingSpark) {
 	IgnitionContext ctx;
 	ctx.eventIndex = 0;
 	ctx.isOverdwellProtect = true;
+	engine->ignitionEvents.elements[0].state = IgnitionOccurrenceState::Charging;
 	event.fallbackIsCurrent = true;
 	engine->ignitionState.dwellAngle = NAN; // Stop after discharging the coil.
 	fireSparkAndPrepareNextSchedule(ctx);
@@ -677,4 +679,54 @@ TEST(TriggerScheduler, inlineSynchronizationLossDropsDueAndWaitingButPreservesSa
 	EXPECT_EQ(1, safetyCount);
 	EXPECT_EQ(0, executor.size());
 	engine->scheduler.setMockExecutor(nullptr);
+}
+
+TEST(IgnitionOccurrence, fireBeforePendingChargeInvalidatesExtractedCallback) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	setCylinderCount(1);
+	engineConfiguration->minimumIgnitionTiming = -25;
+	engine->rpmCalculator.oneDegreeUs = 100;
+	engine->ignitionState.sparkDwell = 1;
+	engine->ignitionState.dwellAngle = 10;
+	engine->cylinders[0].setIgnitionTimingBtdc(-25);
+	enginePins.coils[0].setLow();
+	onTriggerEventSparkLogic({getTimeNowNt(), 10, 30, 10, 30});
+	auto& event = engine->ignitionEvents.elements[0];
+	auto oldCharge = event.dwellStartTimer.action;
+	auto oldFire = event.sparkEvent.scheduling.action;
+	ASSERT_TRUE(oldCharge);
+	ASSERT_TRUE(oldFire);
+	oldFire.execute();
+	EXPECT_EQ(IgnitionOccurrenceState::Closed, event.state);
+	EXPECT_FALSE(event.dwellStartTimer.action);
+	oldCharge.execute();
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	onTriggerEventSparkLogic({getTimeNowNt(), 10, 30, 10, 30});
+	const auto newGeneration = event.generation;
+	oldCharge.execute();
+	oldFire.execute();
+	EXPECT_EQ(newGeneration, event.generation);
+	EXPECT_EQ(IgnitionOccurrenceState::ChargePending, event.state);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	eth.moveTimeForwardAndInvokeEventsUs(1500);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+}
+
+TEST(IgnitionOccurrence, duplicateChargeDoesNotRenewDwell) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	setCylinderCount(1);
+	engineConfiguration->minimumIgnitionTiming = -25;
+	engine->rpmCalculator.oneDegreeUs = 100;
+	engine->ignitionState.sparkDwell = 1;
+	engine->ignitionState.dwellAngle = 10;
+	engine->cylinders[0].setIgnitionTimingBtdc(-25);
+	enginePins.coils[0].setLow();
+	onTriggerEventSparkLogic({getTimeNowNt(), 10, 30, 10, 30});
+	auto charge = engine->ignitionEvents.elements[0].dwellStartTimer.action;
+	eth.moveTimeForwardAndInvokeEventsUs(500);
+	eth.moveTimeForwardAndInvokeEventsUs(900);
+	charge.execute();
+	eth.moveTimeForwardAndInvokeEventsUs(100);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(0, engine->scheduler.size());
 }

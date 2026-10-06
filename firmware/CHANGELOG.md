@@ -12,6 +12,8 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Close ignition occurrences atomically and reject obsolete charge/fire callbacks, including a charge overtaken by its spark. Snapshot dwell for minimum-dwell decisions and give multispark pulses distinct callback generations.
+
 ### Breaking Changes
  - 
 
