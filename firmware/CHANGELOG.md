@@ -12,20 +12,6 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
-- Invalidate the previous charge callback on every pending dwell revision while keeping the firing occurrence and physical owner unchanged. A copied callback from an older charge estimate cannot energize the coil.
-
-- Recheck ignition authorization when a pending main or trailing charge executes, and before another multispark pulse. Disabling ignition or entering a limiter/fatal cut cannot revive an old pending HIGH; a coil already charging retains its LOW and hard guard.
-
-- Refine the experimental cycle-profile conversion with a local last-interval fallback only when all three matched recent speed ratios agree within 10%. Preserve the historical profile ratio guard and refuse that fallback for long-horizon dwell budgets.
-
-- Add opt-in experimental dwell time-budget planning for fully phase-synchronized individual coils on supported rising-only missing-tooth wheels. Keep the advance live until arming, identify the target TDC cycle, revise pending charge before angle promotion, and preserve physical charge deadlines after HIGH. Legacy remains the default.
-
-- Experimental ignition settings use new persistent storage. This changes tune layout/size: old binary tunes are rejected and defaults restored; export and migrate the tune with matching TunerStudio definitions. Both experimental modes default to Legacy. Existing unused bits are not reused.
-
-- Bound each continuous ignition output pulse with an independent 1.5x nominal dwell timer. Charge age and ownership survive angle promotion and repeated HIGH; competing occurrences cannot take over an energized coil. Main/trailing guards force LOW even if an occurrence was invalidated. Raw ignition GPIO/bench HIGH also uses the current nominal dwell cap; invalid dwell cannot energize an output.
-
-- Close ignition occurrences atomically and reject obsolete charge/fire callbacks, including a charge overtaken by its spark. Snapshot dwell for minimum-dwell decisions and give multispark pulses distinct callback generations.
-
 ### Breaking Changes
  - 
 
@@ -45,11 +31,13 @@ or
 ## Unreleased
 
 ### Breaking Changes
+ - Advance flash data version to `261007` and append dedicated storage for the experimental ignition settings (engine configuration 3800 to 3804 bytes, tune page 23832 to 23836). Older binary tunes are rejected and defaults restored; export and migrate with matching TunerStudio definitions. Both settings default to Legacy; previously unused bits are not reused.
  - Removed the explicit threshold for the closed loop fuel idle region. Instead, the idle region is used whenever the idle controller decides the engine is idling, as this better matches behaviors like idle-up when cold, return to idle, etc.
  - MAF trim is split out as its own table, rather than sharing the VE table. Most setups should have this table set to all 100, but if yours isn't, just copy values over from the VE table.
 
 ### Added
- - Experimental opt-in cycle profile ignition scheduling for rising-only missing tooth crank wheels with full cam phase synchronization. Legacy timing remains the default and fallback; RPM and dwell angle planning are unchanged. Uses a reserved configuration bit without shifting tune fields.
+ - Experimental opt-in cycle profile ignition conversion and time-budget dwell planning for fully phase-synchronized rising-only missing-tooth wheels. Time-budget planning requires Individual Coils and latches each target to its TDC occurrence; only pending charge estimates can move. Legacy remains the default.
+ - Use a local last-interval fallback only when all three matched recent speed ratios agree within 10%, preserving historical adaptation bounds and refusing local fallback for long-horizon dwell budgets.
  - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
@@ -73,6 +61,9 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Close ignition occurrences atomically and invalidate obsolete charge/fire callbacks, including extracted callbacks from a superseded pending charge estimate. Preserve firing ownership across charge revisions and give multispark pulses distinct occurrence identities.
+ - Guard each physical main/trailing ignition output with an immutable 1.5x nominal dwell timer. Repeated HIGH and angle promotion cannot renew its age or cap; stale occurrence cleanup cannot strand a coil HIGH. Raw ignition bench HIGH uses the same cap, and invalid dwell cannot energize an output.
+ - Recheck live ignition enable and cut state before pending main/trailing HIGH and additional multispark pulses; existing charges retain their LOW and guard.
  - Preserve a pending ignition discharge before reusing the same event after rapid synchronization loss/restart or trigger configuration changes. Skip the overlapping charge so it cannot lose its overdwell protection.
  - Use explicit trigger queue membership and tail pointers for constant-time insertion and unqueued-event cancellation
  - Prevent stale trigger-scheduled events and overdwell callbacks from interfering with newer ignition cycles after stop/restart or trigger reconfiguration; keep HPFP shutdown timers from restarting an old scheduling chain
