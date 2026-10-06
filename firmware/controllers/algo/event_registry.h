@@ -56,6 +56,7 @@ public:
 	// the scheduler lock and cannot remain extracted across even one such wrap.
 	// No pointer to a mutable context is ever handed to the executor.
 	uint32_t generation = 0;
+	uint32_t chargeGeneration = 0;
 	uint16_t outputMaskSnapshot = 0;
 	uint8_t sparksRemaining = 0;
 	IgnitionOccurrenceState state = IgnitionOccurrenceState::Closed;

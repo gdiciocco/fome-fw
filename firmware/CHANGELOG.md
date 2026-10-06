@@ -12,6 +12,10 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Invalidate the previous charge callback on every pending dwell revision while keeping the firing occurrence and physical owner unchanged. A copied callback from an older charge estimate cannot energize the coil.
+
+- Recheck ignition authorization when a pending main or trailing charge executes, and before another multispark pulse. Disabling ignition or entering a limiter/fatal cut cannot revive an old pending HIGH; a coil already charging retains its LOW and hard guard.
+
 - Refine the experimental cycle-profile conversion with a local last-interval fallback only when all three matched recent speed ratios agree within 10%. Preserve the historical profile ratio guard and refuse that fallback for long-horizon dwell budgets.
 
 - Add opt-in experimental dwell time-budget planning for fully phase-synchronized individual coils on supported rising-only missing-tooth wheels. Keep the advance live until arming, identify the target TDC cycle, revise pending charge before angle promotion, and preserve physical charge deadlines after HIGH. Legacy remains the default.

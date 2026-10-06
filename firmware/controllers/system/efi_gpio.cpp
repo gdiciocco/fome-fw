@@ -729,13 +729,18 @@ bool IgnitionOutputPin::charge(uint32_t owner, float dwellMs, action_s guardActi
 		return false;
 	}
 	NamedOutputPin::setHigh();
-	if (!ownedBy(owner)) { discharge(owner); return false; }
+	if (!ownedBy(owner)) {
+		discharge(owner);
+		return false;
+	}
 	return true;
 }
 
 void IgnitionOutputPin::setValue(int logicValue) {
 	chibios_rt::CriticalSectionLocker csl;
-	if (logicValue && hasFirmwareError()) { return; }
+	if (logicValue && hasFirmwareError()) {
+		return;
+	}
 	if (!logicValue) {
 		if (ignitionEngineAvailable() && m_guard.action) {
 			engine->scheduler.cancel(&m_guard);
