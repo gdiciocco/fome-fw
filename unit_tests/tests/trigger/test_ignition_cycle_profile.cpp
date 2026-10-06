@@ -453,3 +453,170 @@ TEST(IgnitionCycleProfile, CoherentLocalFallbackDoesNotRescueRejectedLongHorizon
 		EXPECT_FALSE(t.predictor.getTimeToAngleNt(t.phase, 90));
 	}
 }
+
+TEST(IgnitionTimeBudget, ElectricalDecoderWithMissingAndExtraPulses) {
+	for (int teeth : {36, 60}) {
+		for (int noise : {0, 1, 2}) {
+			EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+			engineConfiguration->ignitionCycleProfile = true;
+			engineConfiguration->isIgnitionEnabled = true;
+			engineConfiguration->ignitionTimeBudget = true;
+			engineConfiguration->isInjectionEnabled = false;
+			setCrankOperationMode();
+			engineConfiguration->skippedWheelOnCam = false;
+			engineConfiguration->trigger.customTotalToothCount = teeth;
+			engineConfiguration->trigger.customSkippedToothCount = 2;
+			engineConfiguration->vvtMode[0] = VVT_SINGLE_TOOTH;
+			engineConfiguration->camInputs[0] = Gpio::A10;
+			engineConfiguration->vvtOffsets[0] = 0;
+			engineConfiguration->globalTriggerAngleOffset = 0;
+			eth.setTriggerType(trigger_type_e::TT_TOOTHED_WHEEL);
+			auto& tc = engine->triggerCentral;
+			ASSERT_EQ(tc.instantRpm.ignitionProfile.toothCount(), 2u * (teeth - 2));
+			setTimeNowUs(1000000);
+			unsigned valid = 0;
+			unsigned discharges = 0;
+			engine->onIgnitionEvent = [&](IgnitionContext ctx, bool charging) {
+				if (charging) {
+					return;
+				}
+				forEachSetBit(ctx.outputsMask(), [&](size_t index) {
+					auto& pin = enginePins.coils[index];
+					if (pin.ownedBy(ctx.owner())) {
+						discharges++;
+						const float ageMs = NT2USF(getTimeNowNt() - pin.firstHigh()) * 0.001f;
+						EXPECT_LE(
+								ageMs, 1.5f * engine->ignitionEvents.elements[ctx.eventIndex].occurrenceDwell + 0.02f);
+					}
+				});
+			};
+			for (unsigned j = 0; j < unsigned(12 * (teeth - 2)); j++) {
+				float span = j % (teeth - 2) == 0 ? 3 * 360.0f / teeth : 360.0f / teeth;
+				// Cam edge halfway between teeth, every 720 degrees, away from crank sync.
+				if (j % (2 * (teeth - 2)) == 10) {
+					eth.moveTimeForwardAndInvokeEventsUs(span * 100 / 2);
+					hwHandleVvtCamSignal(true, getTimeNowNt(), 0);
+					eth.moveTimeForwardAndInvokeEventsUs(span * 100 / 2);
+				} else {
+					eth.moveTimeForwardAndInvokeEventsUs(span * 100);
+				}
+				engine->periodicFastCallback();
+				const bool disturbed = j == unsigned(7 * (teeth - 2) + 15);
+				if (noise != 1 || !disturbed) {
+					eth.firePrimaryTriggerRise();
+				}
+				if (noise == 2 && disturbed) {
+					eth.moveTimeForwardAndInvokeEventsUs(50);
+					eth.firePrimaryTriggerRise();
+				}
+				if (tc.triggerState.getShaftSynchronized()) {
+					const auto index =
+							tc.triggerState.getCurrentIndex() +
+							(tc.triggerState.getCrankSynchronizationCounter() % 2) * tc.triggerShape.getSize();
+					const auto next = index + 2 == tc.engineCycleEventCount ? 0 : index + 2;
+					TrgPhase current{tc.triggerFormDetails.eventAngles[index]};
+					TrgPhase following{tc.triggerFormDetails.eventAngles[next]};
+					EnginePhaseInfo info{
+							getTimeNowNt(), current, following, tc.toEngPhase(current), tc.toEngPhase(following)};
+					if (auto delay = tc.instantRpm.ignitionProfile.getDelayNt(info, 1)) {
+						valid++;
+						if (noise == 0) {
+							EXPECT_NEAR(delay.Value, USF2NT(100.0f), USF2NT(0.5f));
+						}
+					}
+				}
+			}
+			EXPECT_GT(discharges, 10u);
+			EXPECT_TRUE(tc.triggerState.hasSynchronizedPhase());
+			EXPECT_GT(valid, 50u);
+			tc.syncAndReport(2, 1 - (tc.triggerState.getCrankSynchronizationCounter() % 2));
+			// Phase shift invalidates a formerly ready cache immediately.
+			EnginePhaseInfo old{getTimeNowNt(), {0}, {10}, {0}, {10}};
+			EXPECT_FALSE(tc.instantRpm.ignitionProfile.getDelayNt(old, 1));
+			engine->OnTriggerSynchronizationLost();
+			eth.moveTimeForwardAndInvokeEventsUs(10000);
+			for (auto& pin : enginePins.coils) {
+				EXPECT_FALSE(pin.getLogicValue());
+			}
+			engine->onIgnitionEvent = {};
+			EXPECT_FALSE(tc.instantRpm.ignitionProfile.getDelayNt(old, 1));
+		}
+	}
+}
+
+TEST(IgnitionTimeBudget, RevisionInvalidatesOnlyOldChargeToken) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	setCylinderCount(1);
+	engineConfiguration->ignitionTimeBudget = true;
+	engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
+	engineConfiguration->minimumIgnitionTiming = -100;
+	engine->ignitionState.sparkDwell = 1;
+	engine->ignitionState.dwellAngle = 10;
+	engine->rpmCalculator.oneDegreeUs = 100;
+	engine->cylinders[0].setIgnitionTimingBtdc(-25);
+	auto& tc = engine->triggerCentral;
+	initializeSkippedToothTrigger(&tc.triggerShape, 36, 2, FOUR_STROKE_CRANK_SENSOR, SyncEdge::RiseOnly);
+	for (int i = 0; i < 68; i++) {
+		tc.triggerFormDetails.eventAngles[2 * i] = (i / 34) * 360 + (i % 34) * 10;
+		tc.triggerFormDetails.eventAngles[2 * i + 1] = tc.triggerFormDetails.eventAngles[2 * i];
+	}
+	tc.instantRpm.ignitionProfile.configure(tc.triggerShape, tc.triggerFormDetails);
+	tc.triggerState.setNeedsDisambiguation(true, true);
+	tc.triggerState.syncEnginePhase(2, 0, 720);
+	onTriggerEventSparkLogic({getTimeNowNt(), 10, 20, 10, 20});
+	auto& event = engine->ignitionEvents.elements[0];
+	ASSERT_EQ(IgnitionOccurrenceState::ChargePending, event.state);
+	const auto occurrenceGeneration = event.generation;
+	const auto chargeGeneration = event.chargeGeneration;
+	auto oldCharge = event.dwellStartTimer.action;
+	const auto oldFireArgument = event.sparkEvent.action.getArgument();
+	eth.moveTimeForwardAndInvokeEventsUs(200);
+	engine->rpmCalculator.oneDegreeUs = 400;
+	engine->module<TriggerScheduler>()->onEnginePhase(1000, {getTimeNowNt(), 20, 30, 20, 30});
+	EXPECT_EQ(occurrenceGeneration, event.generation);
+	EXPECT_NE(chargeGeneration, event.chargeGeneration);
+	EXPECT_EQ(oldFireArgument, event.sparkEvent.scheduling.action.getArgument());
+	oldCharge.execute();
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	eth.moveTimeForwardAndInvokeEventsUs(300);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	eth.moveTimeForwardAndInvokeEventsUs(700);
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	eth.moveTimeForwardAndInvokeEventsUs(1000);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(0, engine->scheduler.size());
+}
+
+TEST(IgnitionTimeBudget, ExpiredTargetIsCountedAndCannotBeRevivedByRetard) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	setCylinderCount(1);
+	engineConfiguration->ignitionTimeBudget = true;
+	engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
+	engineConfiguration->minimumIgnitionTiming = -100;
+	engine->ignitionState.sparkDwell = 1;
+	engine->ignitionState.dwellAngle = 10;
+	engine->rpmCalculator.oneDegreeUs = 100;
+	engine->cylinders[0].setIgnitionTimingBtdc(-25);
+	auto& tc = engine->triggerCentral;
+	initializeSkippedToothTrigger(&tc.triggerShape, 36, 2, FOUR_STROKE_CRANK_SENSOR, SyncEdge::RiseOnly);
+	for (int i = 0; i < 68; i++) {
+		tc.triggerFormDetails.eventAngles[2 * i] = (i / 34) * 360 + (i % 34) * 10;
+		tc.triggerFormDetails.eventAngles[2 * i + 1] = tc.triggerFormDetails.eventAngles[2 * i];
+	}
+	tc.instantRpm.ignitionProfile.configure(tc.triggerShape, tc.triggerFormDetails);
+	tc.triggerState.setNeedsDisambiguation(true, true);
+	tc.triggerState.syncEnginePhase(2, 0, 720);
+	onTriggerEventSparkLogic({getTimeNowNt(), 0, 10, 0, 10});
+	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
+	auto& event = engine->ignitionEvents.elements[0];
+	EXPECT_EQ(1u, event.expiredTargetCount);
+	engine->cylinders[0].setIgnitionTimingBtdc(-45);
+	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
+	EXPECT_EQ(0u, engine->engineState.sparkCounter);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	onTriggerEventSparkLogic({getTimeNowNt(), 0, 10, 0, 10});
+	onTriggerEventSparkLogic({getTimeNowNt(), 30, 40, 30, 40});
+	EXPECT_EQ(1u, engine->engineState.sparkCounter);
+	eth.moveTimeForwardAndInvokeEventsUs(2000);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+}

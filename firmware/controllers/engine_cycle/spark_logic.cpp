@@ -135,6 +135,10 @@ static void prepareCylinderIgnitionSchedule(angle_t dwellAngleDuration, floatms_
 	engine->outputChannels.currentIgnitionMode = static_cast<uint8_t>(ignitionMode);
 }
 
+static bool newIgnitionChargeAllowed() {
+	return engineConfiguration->isIgnitionEnabled && !hasFirmwareError() && getLimpManager()->allowIgnition().value;
+}
+
 static void fireTrailingSpark(IgnitionContext ctx) {
 	chibios_rt::CriticalSectionLocker csl;
 	if (ctx.eventIndex >= MAX_CYLINDER_COUNT) {
@@ -160,6 +164,13 @@ static void chargeTrailingSpark(IgnitionContext ctx) {
 		return;
 	}
 	auto& pin = enginePins.trailingCoils[event.trailingCylinder];
+	if (pin.ownedBy(ctx.owner())) {
+		return;
+	}
+	if (!newIgnitionChargeAllowed() || !engineConfiguration->enableTrailingSparks) {
+		fireTrailingSpark(ctx);
+		return;
+	}
 	if (!pin.charge(ctx.owner(), event.trailingDwell, {fireTrailingSpark, ctx})) {
 		event.contentionCount++;
 		fireTrailingSpark(ctx);
@@ -174,7 +185,20 @@ static bool isCurrent(IgnitionContext ctx, const IgnitionEvent& event) {
 	return ctx.generation == event.generation && event.state != IgnitionOccurrenceState::Closed;
 }
 
+static void nextChargeGeneration(IgnitionEvent& event) {
+	event.chargeGeneration = (event.chargeGeneration + 1) & 0x7ffffff;
+	if (!event.chargeGeneration) {
+		event.chargeGeneration = 1;
+	}
+}
+
+static IgnitionContext chargeContext(IgnitionContext ctx, const IgnitionEvent& event) {
+	ctx.generation = event.chargeGeneration;
+	return ctx;
+}
+
 static IgnitionContext beginOccurrence(IgnitionEvent& event) {
+	nextChargeGeneration(event);
 	event.generation = (event.generation + 1) & 0x7ffffff;
 	if (!event.generation) {
 		event.generation = 1;
@@ -259,7 +283,7 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 	}
 
 	// If there are more sparks to fire, schedule them
-	if (event.sparksRemaining > 0 && !ctx.isOverdwellProtect && anyCharged) {
+	if (event.sparksRemaining > 0 && !ctx.isOverdwellProtect && anyCharged && newIgnitionChargeAllowed()) {
 		event.sparksRemaining--;
 		ctx = beginOccurrence(event);
 		event.occurrenceDwell = NT2USF(engine->engineState.multispark.dwell) * 0.001f;
@@ -268,7 +292,8 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 		efitick_t nextFiring = nextDwellStart + engine->engineState.multispark.dwell;
 
 		// We can schedule both of these right away, since we're going for "asap" not "particular angle"
-		engine->scheduler.schedule("dwell", &event.dwellStartTimer, nextDwellStart, {&turnSparkPinHigh, ctx});
+		engine->scheduler.schedule(
+				"dwell", &event.dwellStartTimer, nextDwellStart, {&turnSparkPinHigh, chargeContext(ctx, event)});
 		engine->scheduler.schedule(
 				"firing", &event.sparkEvent.scheduling, nextFiring, {fireSparkAndPrepareNextSchedule, ctx});
 	} else {
@@ -292,7 +317,7 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 		prepareCylinderIgnitionSchedule(dwellAngleDuration, sparkDwell, event);
 	}
 
-	engine->onSparkFireKnockSense(event.cylinderNumber);
+	engine->onSparkFireKnockSense(event.occurrenceCylinder);
 }
 
 void turnSparkPinHigh(IgnitionContext ctx) {
@@ -301,7 +326,14 @@ void turnSparkPinHigh(IgnitionContext ctx) {
 		return;
 	}
 	auto& event = engine->ignitionEvents.elements[ctx.eventIndex];
-	if (!isCurrent(ctx, event) || event.state != IgnitionOccurrenceState::ChargePending || event.wasSparkLimited) {
+	if (ctx.generation != event.chargeGeneration || event.state != IgnitionOccurrenceState::ChargePending ||
+		event.wasSparkLimited) {
+		return;
+	}
+	ctx.generation = event.generation;
+	if (!newIgnitionChargeAllowed()) {
+		event.wasSparkLimited = true;
+		closeOccurrence(event);
 		return;
 	}
 	efitick_t nowNt = getTimeNowNt();
@@ -393,10 +425,18 @@ static void scheduleSparkEvent(
 		 */
 		if (chargeDelayNt) {
 			chargeTime = phase.timestamp + static_cast<uint32_t>(chargeDelayNt.Value);
-			engine->scheduler.schedule("time budget dwell", &event.dwellStartTimer, chargeTime, {turnSparkPinHigh, ctx});
+			engine->scheduler.schedule(
+					"time budget dwell",
+					&event.dwellStartTimer,
+					chargeTime,
+					{turnSparkPinHigh, chargeContext(ctx, event)});
 		} else {
-		chargeTime = scheduleByAngleInPhase(
-				&event.dwellStartTimer, phase, angleOffset, {&turnSparkPinHigh, ctx}, AngleTimingPolicy::Ignition);
+			chargeTime = scheduleByAngleInPhase(
+					&event.dwellStartTimer,
+					phase,
+					angleOffset,
+					{&turnSparkPinHigh, chargeContext(ctx, event)},
+					AngleTimingPolicy::Ignition);
 		}
 	}
 
@@ -496,37 +536,51 @@ static void prepareIgnitionSchedule() {
 }
 
 static bool timeBudgetSupported() {
-	return engineConfiguration->ignitionTimeBudget &&
-		getCurrentIgnitionMode() == IM_INDIVIDUAL_COILS &&
-		getTriggerCentral()->triggerState.hasSynchronizedPhase() &&
-		!getTriggerCentral()->directSelfStimulation &&
-		getTriggerCentral()->instantRpm.ignitionProfile.toothCount() > 0;
+	return engineConfiguration->ignitionTimeBudget && getCurrentIgnitionMode() == IM_INDIVIDUAL_COILS &&
+		   getTriggerCentral()->triggerState.hasSynchronizedPhase() && !getTriggerCentral()->directSelfStimulation &&
+		   getTriggerCentral()->instantRpm.ignitionProfile.toothCount() > 0;
 }
 
 static expected<float> ignitionEta(const EnginePhaseInfo& phase, float distance) {
-	if (!std::isfinite(distance) || distance < 0 || distance > 180) { return unexpected; }
+	if (!std::isfinite(distance) || distance < 0 || distance > 180) {
+		return unexpected;
+	}
 	auto eta = getTriggerCentral()->instantRpm.ignitionProfile.getTimeToAngleNt(phase, distance);
-	if (eta) { return eta; }
+	if (eta) {
+		return eta;
+	}
 	const float fallback = USF2NT(engine->rpmCalculator.oneDegreeUs) * distance;
 	return std::isfinite(fallback) && fallback >= 0 ? expected<float>(fallback) : unexpected;
 }
 
 void revisePendingIgnition(const EnginePhaseInfo& phase) {
-	if (!timeBudgetSupported()) { return; }
+	if (!timeBudgetSupported()) {
+		return;
+	}
 	chibios_rt::CriticalSectionLocker csl;
 	for (auto& event : engine->ignitionEvents.elements) {
-		if (!event.plannedByTime || event.state != IgnitionOccurrenceState::ChargePending || event.wasSparkLimited) { continue; }
+		if (!event.plannedByTime || event.state != IgnitionOccurrenceState::ChargePending || event.wasSparkLimited) {
+			continue;
+		}
 		float distance = event.plannedSparkAngle - phase.currentEngPhase.angle;
-		if (distance < 0) { distance += 720; }
+		if (distance < 0) {
+			distance += 720;
+		}
 		auto eta = ignitionEta(phase, distance);
-		if (!eta) { continue; }
+		if (!eta) {
+			continue;
+		}
 		IgnitionContext ctx;
 		ctx.eventIndex = event.cylinderIndex;
 		ctx.generation = event.generation;
 		const float delay = std::max(0.0f, eta.Value - MSF2NT(event.occurrenceDwell));
+		nextChargeGeneration(event);
 		engine->scheduler.cancel(&event.dwellStartTimer);
-		engine->scheduler.schedule("revised dwell", &event.dwellStartTimer,
-			phase.timestamp + static_cast<uint32_t>(delay), {turnSparkPinHigh, ctx});
+		engine->scheduler.schedule(
+				"revised dwell",
+				&event.dwellStartTimer,
+				phase.timestamp + static_cast<uint32_t>(delay),
+				{turnSparkPinHigh, chargeContext(ctx, event)});
 	}
 }
 
@@ -564,7 +618,9 @@ void onTriggerEventSparkLogic(const EnginePhaseInfo& phase) {
 	const bool useBudget = timeBudgetSupported();
 	auto& list = engine->ignitionEvents;
 	if (useBudget) {
-		if (list.plannerPhaseValid && phase.currentEngPhase.angle < list.plannerLastPhase) { list.plannerCycle++; }
+		if (list.plannerPhaseValid && phase.currentEngPhase.angle < list.plannerLastPhase) {
+			list.plannerCycle++;
+		}
 		list.plannerLastPhase = phase.currentEngPhase.angle;
 		list.plannerPhaseValid = true;
 	}
@@ -575,18 +631,30 @@ void onTriggerEventSparkLogic(const EnginePhaseInfo& phase) {
 
 			if (useBudget) {
 				chibios_rt::CriticalSectionLocker csl;
-				if (event.state != IgnitionOccurrenceState::Closed || event.trailingPending) { continue; }
+				if (event.state != IgnitionOccurrenceState::Closed || event.trailingPending) {
+					continue;
+				}
 				// Anchor identity to the cylinder's TDC cycle, even if advance moves
 				// the spark across 0 degrees. No angular-distance latch is used.
-				const float rawTarget = engine->cylinders[event.cylinderNumber].getSparkAngle(-engine->module<KnockController>()->getKnockRetard());
-				if (!std::isfinite(rawTarget)) { continue; }
+				const float rawTarget = engine->cylinders[event.cylinderNumber].getSparkAngle(
+						-engine->module<KnockController>()->getKnockRetard());
+				if (!std::isfinite(rawTarget)) {
+					continue;
+				}
 				float target = rawTarget;
 				wrapAngle(target, "budget target", ObdCode::CUSTOM_ERR_6550);
 				float distance = target - phase.currentEngPhase.angle;
 				uint32_t occurrence = list.plannerCycle;
-				if (distance < 0) { distance += 720; occurrence++; }
-				if (rawTarget < 0) { occurrence++; }
-				if (rawTarget >= 720) { occurrence--; }
+				if (distance < 0) {
+					distance += 720;
+					occurrence++;
+				}
+				if (rawTarget < 0) {
+					occurrence++;
+				}
+				if (rawTarget >= 720) {
+					occurrence--;
+				}
 				// A target already passed within the bounded horizon is explicitly
 				// skipped once for its TDC occurrence, never wrapped into a late HIGH.
 				if (distance > 540) {
@@ -598,14 +666,22 @@ void onTriggerEventSparkLogic(const EnginePhaseInfo& phase) {
 					}
 					continue;
 				}
-				if (event.plannedCycleValid && event.plannedTdcCycle == occurrence) { continue; }
+				if (event.plannedCycleValid && event.plannedTdcCycle == occurrence) {
+					continue;
+				}
 				auto eta = ignitionEta(phase, distance);
 				float span = phase.nextEngPhase - phase.currentEngPhase;
-				if (span < 0) { span += 720; }
+				if (span < 0) {
+					span += 720;
+				}
 				auto interval = ignitionEta(phase, span);
-				if (!eta || !interval) { continue; }
+				if (!eta || !interval) {
+					continue;
+				}
 				const float delay = std::max(0.0f, eta.Value - MSF2NT(dwellMs));
-				if (delay >= interval.Value) { continue; }
+				if (delay >= interval.Value) {
+					continue;
+				}
 				event.plannedTdcCycle = occurrence;
 				event.plannedCycleValid = true;
 				event.plannedByTime = true;
