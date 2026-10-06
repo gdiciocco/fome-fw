@@ -190,8 +190,12 @@ void runReplay(
 	engine->onIgnitionEvent = [&](IgnitionContext ctx, bool charging) {
 		if (charging) {
 			duplicateCharges[ctx.eventIndex] += charged[ctx.eventIndex];
+			// Repeated setHigh resets the firmware dwell timer, but the physical coil
+			// has remained energized since the first charge callback.
+			if (!charged[ctx.eventIndex]) {
+				chargeUs[ctx.eventIndex] = getTimeNowUs();
+			}
 			charged[ctx.eventIndex] = true;
-			chargeUs[ctx.eventIndex] = getTimeNowUs();
 			return;
 		}
 		bool pinCharged = false;
