@@ -1554,6 +1554,10 @@ pin_input_mode_e[LUA_DIGITAL_INPUT_COUNT iterate] luaDigitalInputPinModes;
 	end_struct
 
 	emp_pump_cfg empPump;
+! Explicit appended storage changes the persistent tune size. Old images are rejected
+! by flash_main rather than reinterpreting arbitrary padding bits as opt-in.
+	bit ignitionCycleProfile,"Cycle profile (experimental)","Legacy";Use the previous 720 degree tooth profile scaled by the recent three intervals for final ignition charge and firing delays. Requires a supported rising only missing tooth crank wheel and full cam phase sync. Falls back to legacy timing during warmup or invalid history. Does not change RPM or dwell start angle planning.
+	bit ignitionTimeBudget,"Time budget (experimental)","Legacy";Plan ignition charge start from the live target and a bounded previous-cycle time budget. Experimental, requires a supported rising-only missing-tooth wheel and full phase sync.
 
 ! end of engine_configuration_s
 end_struct
