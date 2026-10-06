@@ -204,6 +204,9 @@ TEST(IgnitionCycleProfile, ImmediateQueuedAndNonIgnitionPolicy) {
 	tc.instantRpm.ignitionProfile = t.predictor;
 	scheduler->onEnginePhase(1200, t.phase);
 	EXPECT_EQ(queued.scheduling.momentX, NT2US(t.phase.timestamp) + 2000);
+	tc.instantRpm.spinningEventIndex = 1;
+	tc.instantRpm.movePreSynchTimestamps();
+	EXPECT_FALSE(tc.instantRpm.ignitionProfile.getDelayNt(t.phase, 0));
 	eth.clearQueue();
 }
 

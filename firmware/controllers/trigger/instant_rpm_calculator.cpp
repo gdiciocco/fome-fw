@@ -10,6 +10,10 @@ void InstantRpmCalculator::movePreSynchTimestamps() {
 	auto triggerSize = getTriggerCentral()->triggerShape.getLength();
 
 	size_t eventsToCopy = std::min(spinningEventIndex, triggerSize);
+	if (eventsToCopy) {
+		// Relocating shared timestamps starts a new trusted history epoch.
+		ignitionProfile.reset();
+	}
 
 	size_t firstSrc;
 	size_t firstDst;
