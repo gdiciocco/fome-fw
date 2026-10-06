@@ -39,7 +39,11 @@ struct AngleBasedEvent {
 
 #define MAX_OUTPUTS_FOR_IGNITION 2
 
-enum class IgnitionOccurrenceState : uint8_t { Closed, ChargePending, Charging };
+enum class IgnitionOccurrenceState : uint8_t {
+	Closed,
+	ChargePending,
+	Charging
+};
 
 class IgnitionEvent {
 public:
@@ -55,6 +59,15 @@ public:
 	uint8_t sparksRemaining = 0;
 	IgnitionOccurrenceState state = IgnitionOccurrenceState::Closed;
 	float occurrenceDwell = 0;
+	uint32_t trailingGeneration = 0;
+	float trailingDwell = 0;
+	int8_t trailingCylinder = 0;
+	int8_t occurrenceCylinder = 0;
+	bool trailingPending = false;
+	bool trailingEnabled = false;
+	uint32_t hardGuardCount = 0;
+	uint32_t missedChargeCount = 0;
+	uint32_t contentionCount = 0;
 
 	scheduling_s dwellStartTimer;
 	AngleBasedEvent sparkEvent;

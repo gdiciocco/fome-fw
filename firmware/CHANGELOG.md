@@ -12,6 +12,8 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Bound each continuous ignition output pulse with an independent 1.5x nominal dwell timer. Charge age and ownership survive angle promotion and repeated HIGH; competing occurrences cannot take over an energized coil. Main/trailing guards force LOW even if an occurrence was invalidated. Raw ignition GPIO/bench HIGH also uses the current nominal dwell cap; invalid dwell cannot energize an output.
+
 - Close ignition occurrences atomically and reject obsolete charge/fire callbacks, including a charge overtaken by its spark. Snapshot dwell for minimum-dwell decisions and give multispark pulses distinct callback generations.
 
 ### Breaking Changes

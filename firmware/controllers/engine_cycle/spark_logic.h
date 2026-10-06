@@ -15,7 +15,10 @@ void initializeIgnitionActions();
 // Passed by value through the one-word timer action. Mutable scheduling fields
 // live in IgnitionEvent; an extracted old callback cannot acquire a new occurrence.
 union IgnitionContext {
-	constexpr IgnitionContext() : _pad(nullptr) { eventIndex = 0xF; }
+	constexpr IgnitionContext()
+		: _pad(nullptr) {
+		eventIndex = 0xF;
+	}
 	struct {
 		uint32_t eventIndex : 4;
 		uint32_t generation : 27;
@@ -23,9 +26,15 @@ union IgnitionContext {
 	};
 	void* _pad;
 	uint16_t outputsMask() const;
+	uint32_t owner() const {
+		return ((generation << 4) | eventIndex) + 1;
+	}
 };
 
 static_assert(sizeof(IgnitionContext) <= sizeof(void*));
 
 void turnSparkPinHigh(IgnitionContext ctx);
 void fireSparkAndPrepareNextSchedule(IgnitionContext ctx);
+
+void cancelPendingIgnition();
+void stopIgnition();

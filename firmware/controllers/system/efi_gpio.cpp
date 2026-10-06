@@ -7,6 +7,7 @@
  */
 
 #include "pch.h"
+#include "spark_logic.h"
 #include "engine_sniffer.h"
 
 #include "drivers/gpio/gpio_ext.h"
@@ -188,6 +189,8 @@ EnginePins::EnginePins()
 	for (int i = 0; i < MAX_CYLINDER_COUNT; i++) {
 		enginePins.coils[i].setName(sparkNames[i]);
 		enginePins.coils[i].shortName = sparkShortNames[i];
+		enginePins.coils[i].setGuardIndex(i);
+		enginePins.trailingCoils[i].setGuardIndex(i + MAX_CYLINDER_COUNT);
 
 		enginePins.trailingCoils[i].setName(trailNames[i]);
 		enginePins.trailingCoils[i].shortName = trailShortNames[i];
@@ -221,6 +224,9 @@ EnginePins::EnginePins()
 	}
 
 bool EnginePins::stopPins() {
+#if EFI_ENGINE_CONTROL
+	stopIgnition();
+#endif
 	bool result = false;
 	for (int i = 0; i < MAX_CYLINDER_COUNT; i++) {
 		result |= coils[i].stop();
@@ -270,6 +276,8 @@ void EnginePins::startPins() {
 void EnginePins::reset() {
 	for (int i = 0; i < MAX_CYLINDER_COUNT; i++) {
 		injectors[i].reset();
+		coils[i].setLow();
+		trailingCoils[i].setLow();
 	}
 }
 
@@ -647,4 +655,125 @@ void turnAllPinsOff() {
 		enginePins.coils[i].setValue(false);
 		enginePins.trailingCoils[i].setValue(false);
 	}
+}
+
+bool IgnitionOutputPin::canCharge(uint32_t owner) const {
+	// First owner wins. A shared coil cannot be taken over or have its age renewed.
+	return m_currentLogicValue != 1 || m_owner == owner;
+}
+
+bool IgnitionOutputPin::validDwell(float dwellMs) {
+	// Bound the float-to-tick conversion and refuse invalid energy requests.
+	return std::isfinite(dwellMs) && dwellMs >= 0.01f && dwellMs <= 1000;
+}
+
+void IgnitionOutputPin::armGuard(float dwellMs, action_s action) {
+	if (m_guard.action) {
+		engine->scheduler.cancel(&m_guard);
+	}
+	m_firstHigh = getTimeNowNt();
+	m_guardAction = action;
+	m_physicalGeneration = (m_physicalGeneration + 1) & 0x7ffffff;
+	if (!m_physicalGeneration) {
+		m_physicalGeneration = 1;
+	}
+	const uintptr_t encoded = (m_physicalGeneration << 5) | m_guardIndex;
+	m_hardDeadline = m_firstHigh + static_cast<uint32_t>(MSF2NT(1.5f * dwellMs));
+	engine->scheduler.schedule(
+			"coil hard guard", &m_guard, m_hardDeadline, {expireGuard, reinterpret_cast<void*>(encoded)});
+}
+
+void IgnitionOutputPin::expireGuard(void* encoded) {
+	chibios_rt::CriticalSectionLocker csl;
+	const auto token = reinterpret_cast<uintptr_t>(encoded);
+	const auto index = token & 31;
+	if (index >= 2 * MAX_CYLINDER_COUNT) {
+		return;
+	}
+	auto& pin =
+			index < MAX_CYLINDER_COUNT ? enginePins.coils[index] : enginePins.trailingCoils[index - MAX_CYLINDER_COUNT];
+	const auto generation = token >> 5;
+	if (pin.m_physicalGeneration != generation) {
+		return;
+	}
+	// Notify the occurrence, but physical LOW never depends on its record lifetime.
+	auto action = pin.m_guardAction;
+	if (action && pin.m_currentLogicValue == 1) {
+		action.execute();
+	}
+	if (pin.m_physicalGeneration == generation) {
+		pin.setLow();
+	}
+}
+
+bool IgnitionOutputPin::charge(uint32_t owner, float dwellMs, action_s guardAction) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (!canCharge(owner) || !owner || !validDwell(dwellMs)) {
+		return false;
+	}
+	if (m_currentLogicValue == 1) {
+		return true;
+	}
+	m_owner = owner;
+	// Publish a guard before HIGH. Its positive deadline cannot execute inline.
+	armGuard(dwellMs, guardAction);
+	if (m_owner != owner || !m_guard.action || m_hardDeadline <= getTimeNowNt()) {
+		return false;
+	}
+	NamedOutputPin::setHigh();
+	return true;
+}
+
+void IgnitionOutputPin::setValue(int logicValue) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (!logicValue) {
+		if (engine && m_guard.action) {
+			engine->scheduler.cancel(&m_guard);
+		}
+		m_owner = 0;
+		m_guardAction = {};
+	} else if (m_currentLogicValue != 1 && !m_owner) {
+		// Raw GPIO users (including bench pulses) also get a physical cap. They
+		// have no ignition occurrence to notify. LOW->HIGH never inherits old age.
+		const float dwell = engine ? engine->ignitionState.getDwell() : 0;
+		if (!validDwell(dwell)) {
+			return;
+		}
+		armGuard(dwell, {});
+		if (!m_guard.action || m_hardDeadline <= getTimeNowNt()) {
+			return;
+		}
+	}
+	if (logicValue && m_currentLogicValue != 1) {
+		m_firstHigh = getTimeNowNt();
+	}
+	OutputPin::setValue(logicValue);
+}
+
+void IgnitionOutputPin::discharge(uint32_t owner) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (m_owner == owner) {
+		setLow();
+	}
+}
+
+void IgnitionOutputPin::setLow() {
+	chibios_rt::CriticalSectionLocker csl;
+	// Also used by external LOW/stop: physical ownership ends at this edge.
+	if (m_owner && engine) {
+		engine->scheduler.cancel(&m_guard);
+	}
+	m_owner = 0;
+	NamedOutputPin::setLow();
+}
+
+bool IgnitionOutputPin::stop() {
+	const bool wasHigh = getLogicValue();
+	setLow();
+	return wasHigh;
+}
+
+void IgnitionOutputPin::deInit() {
+	setLow();
+	NamedOutputPin::deInit();
 }
