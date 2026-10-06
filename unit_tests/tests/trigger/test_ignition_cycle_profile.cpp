@@ -345,7 +345,7 @@ TEST(IgnitionCycleProfile, DisabledAndUnsupportedUseLegacyTiming) {
 	}
 }
 
-TEST(IgnitionCycleProfile, RejectLargeAdaptationWithoutClamping) {
+TEST(IgnitionCycleProfile, CoherentLocalFallbackKeepsHistoricalAdaptationBounds) {
 	for (float scale : {0.4f, 0.5f, 2.0f, 2.5f}) {
 		EngineTestHelper eth(engine_type_e::TEST_ENGINE);
 		ProfileTrace t;
@@ -353,7 +353,10 @@ TEST(IgnitionCycleProfile, RejectLargeAdaptationWithoutClamping) {
 			float span = t.nextSpan();
 			t.accept();
 			if (j == 139) {
-				EXPECT_EQ(bool(t.predictor.getDelayNt(t.phase, 1)), scale >= 0.5f && scale <= 2.0f);
+				auto local = t.predictor.getDelayNt(t.phase, 1);
+				ASSERT_TRUE(local);
+				EXPECT_NEAR(USF2NT(100.0f * scale), local.Value, 2);
+				EXPECT_EQ(bool(t.predictor.getTimeToAngleNt(t.phase, 90)), scale >= 0.5f && scale <= 2.0f);
 			}
 			t.now += efidur_t{static_cast<int32_t>(USF2NT(span * 100.0f * (j >= 136 ? scale : 1.0f)))};
 		}
@@ -424,4 +427,29 @@ TEST(IgnitionTimeBudget, LiveTargetArmsOncePerTdcOccurrence) {
 	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
 	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
 	EXPECT_EQ(1u, engine->engineState.sparkCounter);
+}
+
+TEST(IgnitionCycleProfile, CoherentLocalFallbackDoesNotRescueRejectedLongHorizon) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	for (bool coherent : {false, true}) {
+		ProfileTrace t;
+		for (unsigned j = 0; j <= 91; j++) {
+			float span = t.nextSpan();
+			t.accept();
+			if (j == 91) {
+				break;
+			}
+			float factor = 1;
+			if (j >= 88) {
+				factor = coherent ? 3.0f : (j == 89 ? 5.0f : 1.0f);
+			}
+			t.now += static_cast<uint32_t>(USF2NT(span * 100.0f * factor));
+		}
+		auto delay = t.predictor.getDelayNt(t.phase, 1);
+		EXPECT_EQ(coherent, bool(delay));
+		if (delay) {
+			EXPECT_NEAR(USF2NT(300), delay.Value, 2);
+		}
+		EXPECT_FALSE(t.predictor.getTimeToAngleNt(t.phase, 90));
+	}
 }

@@ -12,6 +12,8 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Refine the experimental cycle-profile conversion with a local last-interval fallback only when all three matched recent speed ratios agree within 10%. Preserve the historical profile ratio guard and refuse that fallback for long-horizon dwell budgets.
+
 - Add opt-in experimental dwell time-budget planning for fully phase-synchronized individual coils on supported rising-only missing-tooth wheels. Keep the advance live until arming, identify the target TDC cycle, revise pending charge before angle promotion, and preserve physical charge deadlines after HIGH. Legacy remains the default.
 
 - Experimental ignition settings use new persistent storage. This changes tune layout/size: old binary tunes are rejected and defaults restored; export and migrate the tune with matching TunerStudio definitions. Both experimental modes default to Legacy. Existing unused bits are not reused.
