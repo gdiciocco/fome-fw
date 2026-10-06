@@ -69,6 +69,11 @@ public:
 	uint32_t hardGuardCount = 0;
 	uint32_t missedChargeCount = 0;
 	uint32_t contentionCount = 0;
+	uint32_t plannedTdcCycle = 0;
+	uint32_t expiredTargetCount = 0;
+	float plannedSparkAngle = 0;
+	bool plannedCycleValid = false;
+	bool plannedByTime = false;
 
 	scheduling_s dwellStartTimer;
 	AngleBasedEvent sparkEvent;
@@ -103,6 +108,9 @@ public:
 	 */
 	IgnitionEvent elements[MAX_CYLINDER_COUNT];
 	bool isReady = false;
+	uint32_t plannerCycle = 0;
+	float plannerLastPhase = 0;
+	bool plannerPhaseValid = false;
 };
 
 IgnitionEventList* getIgnitionEvents();

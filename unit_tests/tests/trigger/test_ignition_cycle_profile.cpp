@@ -359,3 +359,69 @@ TEST(IgnitionCycleProfile, RejectLargeAdaptationWithoutClamping) {
 		}
 	}
 }
+
+TEST(IgnitionCycleProfile, BoundedTimeBudgetUsesUnmodifiedFutureHistoricalSlots) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	for (int teeth : {36, 60}) {
+		ProfileTrace t(teeth);
+		for (unsigned j = 0; j < 4u * t.predictor.toothCount(); j++) {
+			const float span = t.nextSpan();
+			t.accept();
+			if (j >= t.predictor.toothCount() + 3u) {
+				for (float angle : {0.0f, 1.0f, 17.0f, 90.0f, 180.0f}) {
+					auto budget = t.predictor.getTimeToAngleNt(t.phase, angle);
+					ASSERT_TRUE(budget) << teeth << ":" << j << ":" << angle;
+					EXPECT_NEAR(USF2NT(angle * 100.0f), budget.Value, 5);
+				}
+				EXPECT_FALSE(t.predictor.getTimeToAngleNt(t.phase, 180.01f));
+				auto stale = t.phase;
+				stale.timestamp += US2NT(1);
+				EXPECT_FALSE(t.predictor.getTimeToAngleNt(stale, 20));
+			}
+			t.now += static_cast<int32_t>(USF2NT(span * 100.0f));
+		}
+		t.predictor.reset();
+		EXPECT_FALSE(t.predictor.getTimeToAngleNt(t.phase, 20));
+	}
+}
+
+TEST(IgnitionTimeBudget, LiveTargetArmsOncePerTdcOccurrence) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	setCylinderCount(1);
+	engineConfiguration->ignitionTimeBudget = true;
+	engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
+	engineConfiguration->minimumIgnitionTiming = -100;
+	engine->ignitionState.sparkDwell = 1;
+	engine->ignitionState.dwellAngle = 10;
+	engine->rpmCalculator.oneDegreeUs = 100;
+	engine->cylinders[0].setIgnitionTimingBtdc(-25);
+	auto& tc = engine->triggerCentral;
+	initializeSkippedToothTrigger(&tc.triggerShape, 36, 2, FOUR_STROKE_CRANK_SENSOR, SyncEdge::RiseOnly);
+	for (int i = 0; i < 68; i++) {
+		tc.triggerFormDetails.eventAngles[2 * i] = (i / 34) * 360 + (i % 34) * 10;
+		tc.triggerFormDetails.eventAngles[2 * i + 1] = tc.triggerFormDetails.eventAngles[2 * i];
+	}
+	tc.instantRpm.ignitionProfile.configure(tc.triggerShape, tc.triggerFormDetails);
+	tc.triggerState.setNeedsDisambiguation(true, true);
+	tc.triggerState.syncEnginePhase(2, 0, 720);
+	onTriggerEventSparkLogic({getTimeNowNt(), 0, 10, 0, 10});
+	EXPECT_EQ(0u, engine->engineState.sparkCounter);
+	// Change advance after preparation: planning uses the live target 35 ATDC.
+	engine->cylinders[0].setIgnitionTimingBtdc(-35);
+	onTriggerEventSparkLogic({getTimeNowNt(), 20, 30, 20, 30});
+	auto& event = engine->ignitionEvents.elements[0];
+	ASSERT_EQ(1u, engine->engineState.sparkCounter);
+	EXPECT_FLOAT_EQ(35, event.plannedSparkAngle);
+	eth.moveTimeForwardAndInvokeEventsUs(500);
+	ASSERT_TRUE(enginePins.coils[0].getLogicValue());
+	// A later tune update does not retarget a latched occurrence or renew guard.
+	engine->cylinders[0].setIgnitionTimingBtdc(-45);
+	const auto deadline = enginePins.coils[0].hardDeadline();
+	onTriggerEventSparkLogic({getTimeNowNt(), 20, 30, 20, 30});
+	EXPECT_EQ(deadline, enginePins.coils[0].hardDeadline());
+	engine->module<TriggerScheduler>()->onEnginePhase(1000, {getTimeNowNt(), 30, 40, 30, 40});
+	eth.moveTimeForwardAndInvokeEventsUs(1000);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
+	EXPECT_EQ(1u, engine->engineState.sparkCounter);
+}

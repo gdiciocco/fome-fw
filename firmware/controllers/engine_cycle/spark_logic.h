@@ -38,3 +38,5 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx);
 
 void cancelPendingIgnition();
 void stopIgnition();
+
+void revisePendingIgnition(const EnginePhaseInfo& phase);

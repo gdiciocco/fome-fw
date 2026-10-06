@@ -5,6 +5,7 @@ void IgnitionCycleProfile::reset() {
 	m_count = 0;
 	m_head = 0;
 	m_valid = false;
+	m_budgetValid = false;
 }
 
 void IgnitionCycleProfile::configure(const TriggerWaveform& shape, const TriggerFormDetails& details) {
@@ -53,6 +54,7 @@ void IgnitionCycleProfile::configure(const TriggerWaveform& shape, const Trigger
 
 void IgnitionCycleProfile::update(const uint32_t* timestamps, uint16_t index, const EnginePhaseInfo& phase) {
 	m_valid = false;
+	m_budgetValid = false;
 	if (!m_slots || index >= m_slots || (index & 1)) {
 		reset();
 		return;
@@ -92,6 +94,11 @@ void IgnitionCycleProfile::update(const uint32_t* timestamps, uint16_t index, co
 			const float oldWindow = static_cast<float>(recentOld);
 			// Experimental rejection, rather than clamping an untrusted profile into a timer.
 			if (nowWindow >= 0.5f * oldWindow && nowWindow <= 2.0f * oldWindow) {
+				m_scale = nowWindow / oldWindow;
+				m_oldCurrent = oldCurrent;
+				m_index = index;
+				m_timestamps = timestamps;
+				m_budgetValid = true;
 				// One float division per tooth; each ignition event only needs a multiply.
 				m_ticksPerDegree = (static_cast<float>(durationOld) * nowWindow) / (oldWindow * span);
 				m_span = span;
@@ -118,4 +125,35 @@ expected<float> IgnitionCycleProfile::getDelayNt(const EnginePhaseInfo& phase, f
 		return unexpected;
 	}
 	return m_ticksPerDegree * angleOffset;
+}
+
+
+expected<float> IgnitionCycleProfile::getTimeToAngleNt(const EnginePhaseInfo& phase, float angleOffset) const {
+	if (!m_budgetValid || phase.timestamp != m_phase.timestamp ||
+		!(phase.currentTrgPhase == m_phase.currentTrgPhase) || !(phase.nextTrgPhase == m_phase.nextTrgPhase) ||
+		!(phase.currentEngPhase == m_phase.currentEngPhase) || !(phase.nextEngPhase == m_phase.nextEngPhase) ||
+		!std::isfinite(angleOffset) || angleOffset < 0 || angleOffset > 180) {
+		return unexpected;
+	}
+	float ticks = 0;
+	auto index = m_index;
+	auto oldTime = m_oldCurrent;
+	// Whole historical intervals need no division; only the final partial interval does.
+	for (unsigned count = 0; count < 32; count++) {
+		const auto next = index + 2 == m_slots ? 0 : index + 2;
+		const float span = next ? m_details->eventAngles[next] - m_details->eventAngles[index]
+			: 720.0f - m_details->eventAngles[index];
+		const auto nextTime = m_timestamps[next];
+		const uint32_t duration = nextTime - oldTime;
+		if (!duration || duration > 100000U * US_TO_NT_MULTIPLIER || span <= 0) { return unexpected; }
+		if (angleOffset <= span) {
+			const float result = (ticks + static_cast<float>(duration) * (angleOffset / span)) * m_scale;
+			return std::isfinite(result) && result >= 0 ? expected<float>(result) : unexpected;
+		}
+		ticks += duration;
+		angleOffset -= span;
+		oldTime = nextTime;
+		index = next;
+	}
+	return unexpected;
 }
