@@ -12,6 +12,8 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Add opt-in experimental dwell time-budget planning for fully phase-synchronized individual coils on supported rising-only missing-tooth wheels. Keep the advance live until arming, identify the target TDC cycle, revise pending charge before angle promotion, and preserve physical charge deadlines after HIGH. Legacy remains the default.
+
 - Experimental ignition settings use new persistent storage. This changes tune layout/size: old binary tunes are rejected and defaults restored; export and migrate the tune with matching TunerStudio definitions. Both experimental modes default to Legacy. Existing unused bits are not reused.
 
 - Bound each continuous ignition output pulse with an independent 1.5x nominal dwell timer. Charge age and ownership survive angle promotion and repeated HIGH; competing occurrences cannot take over an energized coil. Main/trailing guards force LOW even if an occurrence was invalidated. Raw ignition GPIO/bench HIGH also uses the current nominal dwell cap; invalid dwell cannot energize an output.
