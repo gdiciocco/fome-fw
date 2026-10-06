@@ -2,7 +2,7 @@
 
 TunerStudio exposes two independent settings: **Ignition scheduling: Legacy / Cycle profile (experimental)** and **Dwell planning: Legacy / Time budget (experimental)**. Both default to Legacy. RPM, idle feedback, and injection retain their existing timing policies.
 
-The settings occupy a new word at the end of `engine_configuration_s`, not previously unused bits. On the current upstream layout, engine configuration grows from 3800 to 3804 bytes and the tune page from 23832 to 23836 bytes. The existing flash loader rejects a stored-size mismatch and restores defaults. Export and migrate a tune with matching firmware/INI definitions. A binary tune from a custom branch requires its own field mapping; a raw copy or assumption that old padding is zero is unsafe.
+The settings occupy a new word at the end of `engine_configuration_s`, not previously unused bits. On the current upstream layout, engine configuration grows from 3800 to 3804 bytes and the tune page from 23832 to 23836 bytes. Flash data version is advanced to `261007`; the existing loader rejects incompatible versions or stored sizes and restores defaults. The generated TunerStudio signature changes with the configuration definition. Export and migrate a tune with matching firmware/INI definitions. A binary tune from a custom branch requires its own field mapping; a raw copy or assumption that old padding is zero is unsafe.
 
 ## Ignition safety, including Legacy mode
 

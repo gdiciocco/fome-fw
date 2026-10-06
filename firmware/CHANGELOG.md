@@ -12,20 +12,6 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
-- Invalidate the previous charge callback on every pending dwell revision while keeping the firing occurrence and physical owner unchanged. A copied callback from an older charge estimate cannot energize the coil.
-
-- Recheck ignition authorization when a pending main or trailing charge executes, and before another multispark pulse. Disabling ignition or entering a limiter/fatal cut cannot revive an old pending HIGH; a coil already charging retains its LOW and hard guard.
-
-- Refine the experimental cycle-profile conversion with a local last-interval fallback only when all three matched recent speed ratios agree within 10%. Preserve the historical profile ratio guard and refuse that fallback for long-horizon dwell budgets.
-
-- Add opt-in experimental dwell time-budget planning for fully phase-synchronized individual coils on supported rising-only missing-tooth wheels. Keep the advance live until arming, identify the target TDC cycle, revise pending charge before angle promotion, and preserve physical charge deadlines after HIGH. Legacy remains the default.
-
-- Experimental ignition settings use new persistent storage. This changes tune layout/size: old binary tunes are rejected and defaults restored; export and migrate the tune with matching TunerStudio definitions. Both experimental modes default to Legacy. Existing unused bits are not reused.
-
-- Bound each continuous ignition output pulse with an independent 1.5x nominal dwell timer. Charge age and ownership survive angle promotion and repeated HIGH; competing occurrences cannot take over an energized coil. Main/trailing guards force LOW even if an occurrence was invalidated. Raw ignition GPIO/bench HIGH also uses the current nominal dwell cap; invalid dwell cannot energize an output.
-
-- Close ignition occurrences atomically and reject obsolete charge/fire callbacks, including a charge overtaken by its spark. Snapshot dwell for minimum-dwell decisions and give multispark pulses distinct callback generations.
-
 ### Breaking Changes
  - 
 
@@ -50,7 +36,11 @@ or
  - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
  - The calibration format includes separate airmass maps and independent load selectors. Back up the project, MSQ and matching INI before updating; restore axes, cells and controls manually with the new definition. Existing binary tunes are not migrated.
 
+ - Advance flash data version to `261007` and append dedicated storage for the experimental ignition settings (engine configuration 3800 to 3804 bytes, tune page 23832 to 23836). Older binary tunes are rejected and defaults restored; export and migrate with matching TunerStudio definitions. Both settings default to Legacy; previously unused bits are not reused.
+
 ### Added
+ - Experimental opt-in cycle profile ignition conversion and time-budget dwell planning for fully phase-synchronized rising-only missing-tooth wheels. Time-budget planning requires Individual Coils and latches each target to its TDC occurrence; only pending charge estimates can move. Legacy remains the default.
+ - Use a local last-interval fallback only when all three matched recent speed ratios agree within 10%, preserving historical adaptation bounds and refusing local fallback for long-horizon dwell budgets.
  - Support for the Hella OPS+T (6PR 010 378-207) combined digital oil pressure and temperature sensor
  - Add `adc_stats` console diagnostics for fast ADC and software knock: conversion starts, completed buffers, skipped starts by reason, and ADC errors.
  - Dedicated Speed Density VE, Alpha-N filling and MAF correction maps retain independent calibrations. SD + Alpha-N combines cylinder air masses with a TPS/RPM contribution map and applies common VE corrections once. See the [capability and upstream comparison guide](../docs/user/blended-airmass.md).
@@ -58,7 +48,6 @@ or
  - Selectable Tcharge or IAT, standalone Alpha-N MAP multiplication, optional Alpha-N barometric compensation, explicit MAP-estimate permission, and Idle VE ownership and load-source controls make the model's temperature, pressure and idle assumptions configurable.
  - Validated fuel publication and atomic callback batches tie new injections to a complete current result. The SD/Alpha-N blend can recover on a healthy remaining model; temporary calculation failures recover automatically, and accepted pulse callbacks finish normally.
  - TunerStudio exposes separate model editors, branch masses, contribution and fallback diagnostics. VE Analyze targets the active standalone map or a qualified whole-session blended endpoint; mixed contributions and enabled Idle VE exclude main-map analysis.
- - Experimental opt-in cycle profile ignition scheduling for rising-only missing tooth crank wheels with full cam phase synchronization. Legacy timing remains the default and fallback; RPM and dwell angle planning are unchanged. Uses a reserved configuration bit without shifting tune fields.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.
  - New `CPU usage` output channel showing approximate firmware CPU load
@@ -82,6 +71,9 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Close ignition occurrences atomically and invalidate obsolete charge/fire callbacks, including extracted callbacks from a superseded pending charge estimate. Preserve firing ownership across charge revisions and give multispark pulses distinct occurrence identities.
+ - Guard each physical main/trailing ignition output with an immutable 1.5x nominal dwell timer. Repeated HIGH and angle promotion cannot renew its age or cap; stale occurrence cleanup cannot strand a coil HIGH. Raw ignition bench HIGH uses the same cap, and invalid dwell cannot energize an output.
+ - Recheck live ignition enable and cut state before pending main/trailing HIGH and additional multispark pulses; existing charges retain their LOW and guard.
  - VE Analyze now exposes the RPM, coolant temperature, TPS rate, battery voltage, TPS and custom-expression filters for Speed Density and Alpha-N as well as MAF. Each map also retains its own lambda target-table choices. Speed Density additionally provides adjustable MAP minimum/maximum filters (default 0-1000 kPa) and TPS minimum/maximum filters (default 0-100%).
  - VE Analyze excludes TPS acceleration/deceleration fuel including fractional tails, wall-wetting transients, after-start and warmup correction, cranking, fuel/spark cuts and DFCO with a default 2-second recovery, launch/anti-lag, and invalid/out-of-range lambda for SD, Alpha-N and MAF. Correction thresholds and lambda limits are adjustable. ECU cranking and cut-recovery telemetry use existing output padding without shifting live-data offsets.
  - Lua calibration writes invalidate fuel calculated from the previous tune, including writes that do not advance the configuration version. Live airmass validation reuses unchanged calibration checks.

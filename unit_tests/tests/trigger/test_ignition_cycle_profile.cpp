@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "trigger_universal.h"
 #include "spark_logic.h"
+#include "defaults.h"
 
 namespace {
 struct ProfileTrace {
@@ -47,6 +48,15 @@ struct ProfileTrace {
 };
 void dummy(void*) {}
 } // namespace
+
+TEST(IgnitionCycleProfile, RestoringDefaultsDisablesBothExperimentalSettings) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	engineConfiguration->ignitionCycleProfile = true;
+	engineConfiguration->ignitionTimeBudget = true;
+	setDefaultIgnition();
+	EXPECT_FALSE(engineConfiguration->ignitionCycleProfile);
+	EXPECT_FALSE(engineConfiguration->ignitionTimeBudget);
+}
 
 TEST(IgnitionCycleProfile, UniformReadinessAndMissingToothGeometry) {
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
