@@ -39,11 +39,22 @@ struct AngleBasedEvent {
 
 #define MAX_OUTPUTS_FOR_IGNITION 2
 
+enum class IgnitionOccurrenceState : uint8_t { Closed, ChargePending, Charging };
+
 class IgnitionEvent {
 public:
 	uint16_t calculateIgnitionOutputMask() const;
 
 	angle_t calculateSparkAngle() const;
+
+	// Generation wraps only after 2^27 occurrences. Timer callbacks execute under
+	// the scheduler lock and cannot remain extracted across even one such wrap.
+	// No pointer to a mutable context is ever handed to the executor.
+	uint32_t generation = 0;
+	uint16_t outputMaskSnapshot = 0;
+	uint8_t sparksRemaining = 0;
+	IgnitionOccurrenceState state = IgnitionOccurrenceState::Closed;
+	float occurrenceDwell = 0;
 
 	scheduling_s dwellStartTimer;
 	AngleBasedEvent sparkEvent;

@@ -143,9 +143,42 @@ static void fireTrailingSpark(IgnitionOutputPin* pin) {
 	pin->setLow();
 }
 
+uint16_t IgnitionContext::outputsMask() const {
+	return eventIndex < MAX_CYLINDER_COUNT ? engine->ignitionEvents.elements[eventIndex].outputMaskSnapshot : 0;
+}
+
+static bool isCurrent(IgnitionContext ctx, const IgnitionEvent& event) {
+	return ctx.generation == event.generation && event.state != IgnitionOccurrenceState::Closed;
+}
+
+static IgnitionContext beginOccurrence(IgnitionEvent& event) {
+	event.generation = (event.generation + 1) & 0x7ffffff;
+	IgnitionContext ctx;
+	ctx.eventIndex = event.cylinderIndex;
+	ctx.generation = event.generation;
+	event.state = IgnitionOccurrenceState::ChargePending;
+	return ctx;
+}
+
+static void closeOccurrence(IgnitionEvent& event) {
+	// Invalidate BEFORE cancellation: an executor may already have copied action.
+	event.state = IgnitionOccurrenceState::Closed;
+	engine->scheduler.cancel(&event.dwellStartTimer);
+	engine->module<TriggerScheduler>()->cancel(&event.sparkEvent);
+	engine->scheduler.cancel(&event.sparkEvent.scheduling);
+	event.sparkEvent.fallbackIsCurrent = false;
+}
+
 void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
+	chibios_rt::CriticalSectionLocker csl;
+	if (ctx.eventIndex >= MAX_CYLINDER_COUNT) {
+		return;
+	}
 	efitick_t nowNt = getTimeNowNt();
 	auto& event = engine->ignitionEvents.elements[ctx.eventIndex];
+	if (!isCurrent(ctx, event)) {
+		return;
+	}
 	const bool staleOverdwell = ctx.isOverdwellProtect && !event.sparkEvent.fallbackIsCurrent;
 	if (ctx.isOverdwellProtect && !staleOverdwell) {
 		// The fallback fired before the expected trigger tooth. Do not later fire
@@ -154,8 +187,8 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 	}
 
 	float actualDwellMs = event.actualDwellTimer.getElapsedSeconds(nowNt) * 1e3;
-	float minDwell = 0.8f * event.sparkDwell;
-	if (!ctx.isOverdwellProtect && actualDwellMs < minDwell) {
+	float minDwell = 0.8f * event.occurrenceDwell;
+	if (!ctx.isOverdwellProtect && event.state == IgnitionOccurrenceState::Charging && actualDwellMs < minDwell) {
 		float extraTimeUs = (minDwell - actualDwellMs) * 1e3;
 
 		if (extraTimeUs < 10) {
@@ -165,7 +198,7 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 		efitick_t delayedFireTime = nowNt + efidur_t{(uint32_t)USF2NT(extraTimeUs)};
 
 		// cancel multispark in case of underdwell
-		ctx.sparksRemaining = 0;
+		event.sparksRemaining = 0;
 
 		// re-schedule ourselves at a later time once enough dwell has elapsed
 		// This is fine to do because it will retard the effective ignition timing, but
@@ -175,13 +208,17 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 		return;
 	}
 
+	if (!staleOverdwell) {
+		closeOccurrence(event);
+	}
+
 #if EFI_UNIT_TEST
 	if (engine->onIgnitionEvent) {
 		engine->onIgnitionEvent(ctx, false);
 	}
 #endif
 
-	forEachSetBit(ctx.outputsMask, [](size_t idx) { enginePins.coils[idx].setLow(); });
+	forEachSetBit(event.outputMaskSnapshot, [](size_t idx) { enginePins.coils[idx].setLow(); });
 	if (staleOverdwell) {
 		// Still discharge the old outputs, but do not cancel or rebuild a newer cycle.
 		return;
@@ -202,8 +239,10 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 	}
 
 	// If there are more sparks to fire, schedule them
-	if (ctx.sparksRemaining > 0 && !ctx.isOverdwellProtect) {
-		ctx.sparksRemaining--;
+	if (event.sparksRemaining > 0 && !ctx.isOverdwellProtect) {
+		event.sparksRemaining--;
+		ctx = beginOccurrence(event);
+		event.occurrenceDwell = NT2USF(engine->engineState.multispark.dwell) * 0.001f;
 
 		efitick_t nextDwellStart = nowNt + engine->engineState.multispark.delay;
 		efitick_t nextFiring = nextDwellStart + engine->engineState.multispark.dwell;
@@ -230,11 +269,17 @@ void fireSparkAndPrepareNextSchedule(IgnitionContext ctx) {
 }
 
 void turnSparkPinHigh(IgnitionContext ctx) {
-	efitick_t nowNt = getTimeNowNt();
-
-	forEachSetBit(ctx.outputsMask, [](size_t idx) { enginePins.coils[idx].setHigh(); });
-
+	chibios_rt::CriticalSectionLocker csl;
+	if (ctx.eventIndex >= MAX_CYLINDER_COUNT) {
+		return;
+	}
 	auto& event = engine->ignitionEvents.elements[ctx.eventIndex];
+	if (!isCurrent(ctx, event) || event.state != IgnitionOccurrenceState::ChargePending || event.wasSparkLimited) {
+		return;
+	}
+	efitick_t nowNt = getTimeNowNt();
+	event.state = IgnitionOccurrenceState::Charging;
+	forEachSetBit(event.outputMaskSnapshot, [](size_t idx) { enginePins.coils[idx].setHigh(); });
 
 	event.actualDwellTimer.reset(nowNt);
 
@@ -263,7 +308,7 @@ static void scheduleSparkEvent(
 		EngPhase sparkAngle,
 		const EnginePhaseInfo& phase) {
 	chibios_rt::CriticalSectionLocker csl;
-	if (event.sparkEvent.scheduling.action) {
+	if (event.state != IgnitionOccurrenceState::Closed || event.sparkEvent.scheduling.action) {
 		// A previous charge still owns this timer, possibly across sync loss or
 		// configuration reset. Let it discharge its outputs before reusing the
 		// event: replacing it could strand an old coil, while retaining it could
@@ -279,10 +324,10 @@ static void scheduleSparkEvent(
 	engine->engineState.sparkCounter++;
 	event.wasSparkLimited = limitedSpark;
 
-	IgnitionContext ctx;
-	ctx.outputsMask = event.calculateIgnitionOutputMask();
-	ctx.eventIndex = event.cylinderIndex;
-	ctx.sparksRemaining = limitedSpark ? 0 : engine->engineState.multispark.count;
+	auto ctx = beginOccurrence(event);
+	event.outputMaskSnapshot = event.calculateIgnitionOutputMask();
+	event.occurrenceDwell = dwellMs;
+	event.sparksRemaining = limitedSpark ? 0 : engine->engineState.multispark.count;
 
 	efitick_t chargeTime;
 
