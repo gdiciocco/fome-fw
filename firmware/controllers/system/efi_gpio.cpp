@@ -657,6 +657,14 @@ void turnAllPinsOff() {
 	}
 }
 
+static bool ignitionEngineAvailable() {
+#if EFI_UNIT_TEST
+	return engine != nullptr;
+#else
+	return true;
+#endif
+}
+
 bool IgnitionOutputPin::canCharge(uint32_t owner) const {
 	// First owner wins. A shared coil cannot be taken over or have its age renewed.
 	return m_currentLogicValue != 1 || m_owner == owner;
@@ -708,7 +716,7 @@ void IgnitionOutputPin::expireGuard(void* encoded) {
 
 bool IgnitionOutputPin::charge(uint32_t owner, float dwellMs, action_s guardAction) {
 	chibios_rt::CriticalSectionLocker csl;
-	if (!canCharge(owner) || !owner || !validDwell(dwellMs)) {
+	if (!canCharge(owner) || !owner || !validDwell(dwellMs) || hasFirmwareError()) {
 		return false;
 	}
 	if (m_currentLogicValue == 1) {
@@ -721,13 +729,15 @@ bool IgnitionOutputPin::charge(uint32_t owner, float dwellMs, action_s guardActi
 		return false;
 	}
 	NamedOutputPin::setHigh();
+	if (!ownedBy(owner)) { discharge(owner); return false; }
 	return true;
 }
 
 void IgnitionOutputPin::setValue(int logicValue) {
 	chibios_rt::CriticalSectionLocker csl;
+	if (logicValue && hasFirmwareError()) { return; }
 	if (!logicValue) {
-		if (engine && m_guard.action) {
+		if (ignitionEngineAvailable() && m_guard.action) {
 			engine->scheduler.cancel(&m_guard);
 		}
 		m_owner = 0;
@@ -735,7 +745,7 @@ void IgnitionOutputPin::setValue(int logicValue) {
 	} else if (m_currentLogicValue != 1 && !m_owner) {
 		// Raw GPIO users (including bench pulses) also get a physical cap. They
 		// have no ignition occurrence to notify. LOW->HIGH never inherits old age.
-		const float dwell = engine ? engine->ignitionState.getDwell() : 0;
+		const float dwell = ignitionEngineAvailable() ? engine->ignitionState.getDwell() : 0;
 		if (!validDwell(dwell)) {
 			return;
 		}
@@ -760,7 +770,7 @@ void IgnitionOutputPin::discharge(uint32_t owner) {
 void IgnitionOutputPin::setLow() {
 	chibios_rt::CriticalSectionLocker csl;
 	// Also used by external LOW/stop: physical ownership ends at this edge.
-	if (m_owner && engine) {
+	if (m_owner && ignitionEngineAvailable()) {
 		engine->scheduler.cancel(&m_guard);
 	}
 	m_owner = 0;
