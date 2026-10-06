@@ -1,4 +1,5 @@
-// Optional decoded phase replay using production RPM, spark and native scheduler code.
+// Diagnostic extension of the branch replay: 15-degree TDC-offset steps include
+// both tooth-boundary and halfway-between-tooth targets. Production code is unchanged.
 // Future timestamps are used only by the offline physical-phase interpolation observer.
 // Decoder synchronization/PMS alignment and hardware interrupt latency are outside this replay.
 #include "pch.h"
@@ -78,6 +79,14 @@ void runReplay(
 	const auto teeth = readProfile(profile);
 	ASSERT_GT(teeth.size(), 100u);
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	for (auto& pin : enginePins.coils) {
+		pin.setLow();
+		ASSERT_FALSE(pin.getLogicValue());
+	}
+	for (auto& pin : enginePins.trailingCoils) {
+		pin.setLow();
+		ASSERT_FALSE(pin.getLogicValue());
+	}
 	setCylinderCount(2);
 	engineConfiguration->firingOrder = FO_1_2;
 	engineConfiguration->timing_offset_cylinder[0] = phase;
@@ -85,6 +94,7 @@ void runReplay(
 	engineConfiguration->alwaysInstantRpm = false;
 #if HAS_CYCLE_PROFILE
 	engineConfiguration->ignitionCycleProfile = instant;
+	engineConfiguration->ignitionTimeBudget = std::getenv("FOME_TIME_BUDGET") != nullptr;
 #endif
 	engineConfiguration->instantRpmRange = 90;
 	engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
@@ -119,6 +129,10 @@ void runReplay(
 
 	auto& tc = engine->triggerCentral;
 	initializeSkippedToothTrigger(&tc.triggerShape, 36, 2, FOUR_STROKE_CRANK_SENSOR, SyncEdge::RiseOnly);
+	// Complete the same geometry metadata used by the production initializer.
+	ASSERT_EQ(tc.triggerShape.primaryTeethPerCycle, 0u); // documents original fixture defect
+	tc.triggerShape.calculateExpectedEventCounts();
+	ASSERT_EQ(tc.triggerShape.primaryTeethPerCycle, 68u);
 	ASSERT_EQ(tc.triggerShape.getLength(), 136u);
 	tc.engineCycleEventCount = 136;
 	tc.triggerState.setNeedsDisambiguation(true, true);
@@ -199,7 +213,12 @@ void runReplay(
 			return;
 		}
 		bool pinCharged = false;
-		forEachSetBit(ctx.outputsMask(), [&](size_t idx) { pinCharged |= enginePins.coils[idx].getLogicValue(); });
+#if HAS_CYCLE_PROFILE
+		const auto mask = ctx.outputsMask();
+#else
+		const auto mask = ctx.outputsMask;
+#endif
+		forEachSetBit(mask, [&](size_t idx) { pinCharged |= enginePins.coils[idx].getLogicValue(); });
 		bool wasCharged = charged[ctx.eventIndex] && pinCharged;
 		charged[ctx.eventIndex] = false;
 		double actualAngle = phaseAt(getTimeNowUs());
@@ -242,8 +261,15 @@ void runReplay(
 				IgnitionContext ctx;
 				ctx._pad = head->action.getArgument();
 				auto& event = engine->ignitionEvents.elements[ctx.eventIndex];
-				if (phaseAt(getTimeNowUs()) >= warmupAngle && !ctx.isOverdwellProtect &&
-					event.actualDwellTimer.getElapsedSeconds(getTimeNowNt()) * 1000 < 0.8f * event.sparkDwell) {
+#if HAS_CYCLE_PROFILE
+				const float dwell = event.occurrenceDwell;
+				const bool ownsCharge = event.state == IgnitionOccurrenceState::Charging;
+#else
+				const float dwell = event.sparkDwell;
+				const bool ownsCharge = true;
+#endif
+				if (ownsCharge && phaseAt(getTimeNowUs()) >= warmupAngle && !ctx.isOverdwellProtect &&
+					event.actualDwellTimer.getElapsedSeconds(getTimeNowNt()) * 1000 < 0.8f * dwell) {
 					delays[ctx.eventIndex]++;
 				}
 			}
@@ -268,7 +294,11 @@ void runReplay(
 		tc.m_lastEventTimer.reset();
 		EnginePhaseInfo info{
 				getTimeNowNt(), {current}, {next}, tc.toEngPhase(TrgPhase{current}), tc.toEngPhase(TrgPhase{next})};
+
 		rpmShaftPositionCallback(index, info);
+		if (i >= 71) {
+			ASSERT_FLOAT_EQ(engine->rpmCalculator.getCachedRpm(), tc.instantRpm.getInstantRpm());
+		}
 #if HAS_CYCLE_PROFILE
 		available = bool(tc.instantRpm.ignitionProfile.getDelayNt(info, 0));
 #endif
@@ -307,6 +337,21 @@ void runReplay(
 		   delays[0],
 		   delays[1],
 		   fallback);
+	std::ofstream physical(
+			std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_physical.csv");
+	physical << "cylinder,end_high,censored_us,hard_guard,missed_charge,contention,expired_target\n";
+	for (int c = 0; c < 2; c++) {
+		const bool high = enginePins.coils[c].getLogicValue();
+		physical << c + 1 << ',' << high << ',' << (high ? getTimeNowUs() - chargeUs[c] : 0);
+#if HAS_CYCLE_PROFILE
+		const auto& event = engine->ignitionEvents.elements[c];
+		physical << ',' << event.hardGuardCount << ',' << event.missedChargeCount << ',' << event.contentionCount << ','
+				 << event.expiredTargetCount;
+#else
+		physical << ",0,0,0,0";
+#endif
+		physical << '\n';
+	}
 	engine->onIgnitionEvent = {};
 #if HAS_CYCLE_PROFILE
 	engine->onIgnitionTiming = {};
@@ -326,11 +371,11 @@ TEST(IgnitionCycleReplay, FixedAdvanceAndDynamicIdle) {
 #endif
 		for (int rpm : {1200, 5000, 10000}) {
 			runReplay("uniform" + std::to_string(rpm), rpm, enabled, 0, 0);
-			for (int phase = 0; phase < 360; phase += 30) {
+			for (int phase = 0; phase < 360; phase += 15) {
 				runReplay("real" + std::to_string(rpm), rpm, enabled, phase, 0);
 			}
 		}
-		for (int phase = 0; phase < 360; phase += 30) {
+		for (int phase = 0; phase < 360; phase += 15) {
 			for (int fast : {0, 1000, 2000, 3000}) {
 				runReplay("real1200", 1200, enabled, phase, 0.1142f, fast);
 			}
@@ -344,7 +389,7 @@ TEST(IgnitionCycleReplay, FixedAdvanceAndDynamicIdle) {
 			  "misfire",
 			  "step_up",
 			  "step_down"}) {
-			for (int phase = 0; phase < 360; phase += 30) {
+			for (int phase = 0; phase < 360; phase += 15) {
 				runReplay(profile, profile == "original" ? 435 : 1200, enabled, phase, 0);
 			}
 		}
