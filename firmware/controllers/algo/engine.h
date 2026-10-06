@@ -295,7 +295,8 @@ public:
 	TestExecutor scheduler;
 
 	std::function<void(const IgnitionContext&, bool)> onIgnitionEvent;
-#endif // EFI_UNIT_TEST
+	std::function<void(bool)> onIgnitionTiming; // Observes final conversion only, absent from firmware.
+#endif											// EFI_UNIT_TEST
 
 #if EFI_ENGINE_CONTROL
 	FuelSchedule injectionEvents;

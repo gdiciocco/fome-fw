@@ -12,6 +12,8 @@ Release template (copy/paste this for new release):
 or
 ## Unreleased
 
+- Experimental ignition settings use new persistent storage. This changes tune layout/size: old binary tunes are rejected and defaults restored; export and migrate the tune with matching TunerStudio definitions. Both experimental modes default to Legacy. Existing unused bits are not reused.
+
 - Bound each continuous ignition output pulse with an independent 1.5x nominal dwell timer. Charge age and ownership survive angle promotion and repeated HIGH; competing occurrences cannot take over an energized coil. Main/trailing guards force LOW even if an occurrence was invalidated. Raw ignition GPIO/bench HIGH also uses the current nominal dwell cap; invalid dwell cannot energize an output.
 
 - Close ignition occurrences atomically and reject obsolete charge/fire callbacks, including a charge overtaken by its spark. Snapshot dwell for minimum-dwell decisions and give multispark pulses distinct callback generations.
@@ -39,6 +41,7 @@ or
  - MAF trim is split out as its own table, rather than sharing the VE table. Most setups should have this table set to all 100, but if yours isn't, just copy values over from the VE table.
 
 ### Added
+ - Experimental opt-in cycle profile ignition scheduling for rising-only missing tooth crank wheels with full cam phase synchronization. Legacy timing remains the default and fallback; RPM and dwell angle planning are unchanged. Uses a reserved configuration bit without shifting tune fields.
  - SD card logs are now organized into `YYYY/MM/DD` folders when the real-time clock is set. If the clock is not set, logs are still written to the root of the card with a sequential name.
  - Fahrenheit temperature support: pick "Fahrenheit" under Settings > Temperature Units in TunerStudio and all temperature gauges, datalogs, sensor adjustments, and thermistor calibration points display in °F. The stored tune is unchanged (always Celsius internally), so switching units never resets your configuration and works on every supported board.
  - Add mode for "true" wasted spark on odd fire engines (Viper V10) where companion cylinders are not exactly 360 degrees apart. Requires cam sync.

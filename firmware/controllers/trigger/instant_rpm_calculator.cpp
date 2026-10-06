@@ -104,6 +104,13 @@ void InstantRpmCalculator::updateInstantRpm(
 
 	assertIsInBounds(index, timeOfLastEvent, "calc timeOfLastEvent");
 
+	if (engineConfiguration->ignitionCycleProfile && !getTriggerCentral()->directSelfStimulation &&
+		getTriggerCentral()->triggerState.hasSynchronizedPhase()) {
+		ignitionProfile.update(timeOfLastEvent, index, phaseInfo);
+	} else {
+		ignitionProfile.reset();
+	}
+
 	// Record the time of this event so we can calculate RPM from it later
 	timeOfLastEvent[index] = nowNt32;
 

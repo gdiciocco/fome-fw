@@ -196,6 +196,14 @@ int TriggerDecoderBase::getCurrentIndex() const {
 	return currentCycle.current_index;
 }
 
+void PrimaryTriggerDecoder::resetHasFullSync() {
+	m_hasSynchronizedPhase = !m_needsDisambiguation;
+	m_phaseAdjustment = 0;
+	if (engine) {
+		getTriggerCentral()->instantRpm.ignitionProfile.reset();
+	}
+}
+
 angle_t PrimaryTriggerDecoder::syncEnginePhase(int divider, int remainder, angle_t engineCycle) {
 	efiAssert(ObdCode::OBD_PCM_Processor_Fault, divider > 1, "syncEnginePhase divider", false);
 	efiAssert(ObdCode::OBD_PCM_Processor_Fault, remainder < divider, "syncEnginePhase remainder", false);
@@ -209,6 +217,10 @@ angle_t PrimaryTriggerDecoder::syncEnginePhase(int divider, int remainder, angle
 
 	{
 		chibios_rt::CriticalSectionLocker csl;
+
+		if (engine && (!m_hasSynchronizedPhase || m_phaseAdjustment != totalShift)) {
+			getTriggerCentral()->instantRpm.ignitionProfile.reset();
+		}
 
 		// Allow injection/ignition to happen, we've now fully sync'd the crank based on new cam information
 		m_hasSynchronizedPhase = true;

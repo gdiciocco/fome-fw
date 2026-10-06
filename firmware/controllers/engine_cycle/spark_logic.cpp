@@ -390,7 +390,8 @@ static void scheduleSparkEvent(
 		 * This way we make sure that coil dwell started while spark was enabled would fire and not burn
 		 * the coil.
 		 */
-		chargeTime = scheduleByAngle(&event.dwellStartTimer, phase.timestamp, angleOffset, {&turnSparkPinHigh, ctx});
+		chargeTime = scheduleByAngleInPhase(
+				&event.dwellStartTimer, phase, angleOffset, {&turnSparkPinHigh, ctx}, AngleTimingPolicy::Ignition);
 	}
 
 	/**
@@ -405,7 +406,7 @@ static void scheduleSparkEvent(
 		return;
 	}
 	bool scheduled = engine->module<TriggerScheduler>()->scheduleOrQueue(
-			&event.sparkEvent, sparkAngle, {fireSparkAndPrepareNextSchedule, ctx}, phase);
+			&event.sparkEvent, sparkAngle, {fireSparkAndPrepareNextSchedule, ctx}, phase, AngleTimingPolicy::Ignition);
 
 	(void)scheduled;
 	(void)chargeTime;
