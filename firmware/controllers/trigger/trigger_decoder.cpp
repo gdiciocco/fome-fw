@@ -196,12 +196,20 @@ int TriggerDecoderBase::getCurrentIndex() const {
 	return currentCycle.current_index;
 }
 
+static void resetIgnitionProfile() {
+#if EFI_UNIT_TEST
+	// Standalone decoder tests can run without an Engine instance.
+	if (!engine) {
+		return;
+	}
+#endif
+	getTriggerCentral()->instantRpm.ignitionProfile.reset();
+}
+
 void PrimaryTriggerDecoder::resetHasFullSync() {
 	m_hasSynchronizedPhase = !m_needsDisambiguation;
 	m_phaseAdjustment = 0;
-	if (engine) {
-		getTriggerCentral()->instantRpm.ignitionProfile.reset();
-	}
+	resetIgnitionProfile();
 }
 
 angle_t PrimaryTriggerDecoder::syncEnginePhase(int divider, int remainder, angle_t engineCycle) {
@@ -218,8 +226,8 @@ angle_t PrimaryTriggerDecoder::syncEnginePhase(int divider, int remainder, angle
 	{
 		chibios_rt::CriticalSectionLocker csl;
 
-		if (engine && (!m_hasSynchronizedPhase || m_phaseAdjustment != totalShift)) {
-			getTriggerCentral()->instantRpm.ignitionProfile.reset();
+		if (!m_hasSynchronizedPhase || m_phaseAdjustment != totalShift) {
+			resetIgnitionProfile();
 		}
 
 		// Allow injection/ignition to happen, we've now fully sync'd the crank based on new cam information
