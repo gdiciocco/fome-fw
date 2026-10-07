@@ -372,4 +372,7 @@ struct_no_prefix output_channels_s
 	int16_t autoscale hpfpTargetLoad;Load: hpfpTarget;"", 0.1, 0, -3276, 3276, 1
 	int16_t[BOOST_BLEND_COUNT iterate] boostOpenLoopBlendXAxisValue;Boost correction X;"", 1, 0, -32768, 32767, 0
 	int16_t[BOOST_BLEND_COUNT iterate] boostClosedLoopBlendXAxisValue;Boost correction X;"", 1, 0, -32768, 32767, 0
+
+! Rolling engine-cycle RPM. Zero when disabled or no complete cycle is valid.
+	uint16_t rollingCycleRpm;RPM: Rolling cycle;"RPM", 1, 0, 0, 8000, 0
 end_struct

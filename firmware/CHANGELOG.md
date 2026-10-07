@@ -38,6 +38,7 @@ or
  - Advance flash data version to `261007` and append dedicated storage for the experimental ignition settings (Capoworks engine configuration 3900 to 3904 bytes, tune page 25148 to 25152). Older binary tunes are rejected and defaults restored; export and migrate with matching TunerStudio definitions. Both settings default to Legacy; previously unused bits are not reused.
 
 ### Added
+ - Add the `rollingCycleRpm` output channel and "RPM - rolling cycle" gauge for idle-only and global rolling RPM feedback. The channel reports zero when disabled or until a complete cycle is valid, including after stop or resynchronization.
  - Local rolling cycle RPM feedback now also feeds the closed-loop idle air PID, including its derivative, and is selectable in the Closed Loop Idle panel. Air control falls back to instantaneous feedback until a complete rolling cycle is valid; changing either feedback mode resets both idle PID integrators.
  - Experimental opt-in cycle profile ignition conversion and time-budget dwell planning for fully phase-synchronized rising-only missing-tooth wheels. Time-budget planning requires Individual Coils and latches each target to its TDC occurrence; only pending charge estimates can move. Legacy remains the default.
  - Use a local last-interval fallback only when all three matched recent speed ratios agree within 10%, preserving historical adaptation bounds and refusing local fallback for long-horizon dwell budgets.
