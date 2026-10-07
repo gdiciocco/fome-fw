@@ -2,7 +2,7 @@
 
 TunerStudio exposes two independent settings: **Ignition scheduling: Legacy / Cycle profile (experimental)** and **Dwell planning: Legacy / Time budget (experimental)**. Both default to Legacy. RPM, idle feedback, and injection retain their existing timing policies.
 
-The settings occupy a new word at the end of `engine_configuration_s`, not previously unused bits. On the current upstream layout, engine configuration grows from 3800 to 3804 bytes and the tune page from 23832 to 23836 bytes. Flash data version is advanced to `261007`; the existing loader rejects incompatible versions or stored sizes and restores defaults. The generated TunerStudio signature changes with the configuration definition. Export and migrate a tune with matching firmware/INI definitions. A binary tune from a custom branch requires its own field mapping; a raw copy or assumption that old padding is zero is unsafe.
+The settings occupy a new word at the end of `engine_configuration_s`, not previously unused bits. On the Capoworks layout, engine configuration grows from 3900 to 3904 bytes and the tune page from 25148 to 25152 bytes. Flash data version is advanced to `261007`; the existing loader rejects incompatible versions or stored sizes and restores defaults. The generated TunerStudio signature changes with the configuration definition. Export and migrate a tune with matching firmware/INI definitions. A binary tune from a custom branch requires its own field mapping; a raw copy or assumption that old padding is zero is unsafe.
 
 ## Ignition safety, including Legacy mode
 
@@ -19,6 +19,10 @@ Repeated HIGH or acquisition by the same owner does not renew age/deadline. A di
 Minimum dwell remains 0.8 times the occurrence's snapshot. Only outputs actually charged by that owner participate. With unequal output ages, the latest minimum-dwell time is limited by the earliest physical hard deadline; the cap wins. A dwell/voltage-table update does not rewrite an active pulse's snapshot. New main/trailing HIGH and additional multispark pulses recheck ignition enable and current cut state; existing charged outputs retain their LOW and guard.
 
 Trailing charge has independent pending identity, cylinder and dwell snapshots. It cannot inherit a subsequent multispark pulse's shorter dwell. Its existing angular offset conversion is retained, but its physical cap can terminate it before the trailing target, including during a long multispark sequence. Raw ignition GPIO/bench HIGH also gets the current nominal dwell cap, and invalid or sub-10-microsecond nominal dwell cannot energize an output. Valid nominal requests are bounded to 0.01–1000 ms for finite timer conversion; this is not a coil-specific acceptable dwell range. Existing multispark OFF delay is preserved. No universal coil recovery/OFF-time calibration is introduced.
+
+## Capoworks RPM feedback integration
+
+The existing idle-only rolling RPM feedback and global rolling-as-Instant-RPM override are preserved. Rolling RPM and ignition prediction consume the shared timestamp history before the current event overwrites it. Ignition prediction is updated before the global rolling RPM publication can return early. Resetting all Instant RPM history and changing the trigger waveform invalidate both consumers; resetting only the rolling publication does not discard a valid ignition profile. Native electrical 36−2/60−2 tests exercise legacy, idle-only rolling and global rolling feedback with clean, missing and extra crank pulses.
 
 ## Supported prediction geometry and history
 

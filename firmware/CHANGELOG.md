@@ -35,8 +35,7 @@ or
 ### Breaking Changes
  - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
  - The calibration format includes separate airmass maps and independent load selectors. Back up the project, MSQ and matching INI before updating; restore axes, cells and controls manually with the new definition. Existing binary tunes are not migrated.
-
- - Advance flash data version to `261007` and append dedicated storage for the experimental ignition settings (engine configuration 3800 to 3804 bytes, tune page 23832 to 23836). Older binary tunes are rejected and defaults restored; export and migrate with matching TunerStudio definitions. Both settings default to Legacy; previously unused bits are not reused.
+ - Advance flash data version to `261007` and append dedicated storage for the experimental ignition settings (Capoworks engine configuration 3900 to 3904 bytes, tune page 25148 to 25152). Older binary tunes are rejected and defaults restored; export and migrate with matching TunerStudio definitions. Both settings default to Legacy; previously unused bits are not reused.
 
 ### Added
  - Experimental opt-in cycle profile ignition conversion and time-budget dwell planning for fully phase-synchronized rising-only missing-tooth wheels. Time-budget planning requires Individual Coils and latches each target to its TDC occurrence; only pending charge estimates can move. Legacy remains the default.
