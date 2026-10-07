@@ -19,6 +19,11 @@ using ::testing::_;
 #else
 #define HAS_CYCLE_PROFILE 0
 #endif
+#if __has_include("ignition_retarget.h")
+#define HAS_RETARGET 1
+#else
+#define HAS_RETARGET 0
+#endif
 namespace {
 struct IdleTimingInputProxy final : IIdleController {
 	IdleController& real;
@@ -175,7 +180,8 @@ void runReplay(
 	ASSERT_TRUE(trace.good());
 	trace << "time_us,unwrapped_angle_deg,cylinder,actual_btdc,requested_btdc,published_btdc,scheduling_error_deg,"
 			 "dwell_ratio,fallback,instant_rpm,scheduling_rpm,min_dwell_delays,coil_charged,charge_duration_us,limited,"
-			 "duplicate_charges,profile_available,predicted_conversions,legacy_conversions\n"
+			 "duplicate_charges,profile_available,predicted_conversions,legacy_conversions,decision_requested_btdc,"
+			 "decision_status\n"
 		  << std::setprecision(12);
 	std::ofstream toothTrace;
 	if (phase == 0 && gain == 0) {
@@ -186,9 +192,28 @@ void runReplay(
 	}
 	std::ofstream plannerTrace;
 	if (std::getenv("FOME_REPLAY_TRACE")) {
-		plannerTrace.open(std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_planner.csv");
-		plannerTrace << "time_us,angle_deg,cylinder,published_btdc,raw_target,before_state,state,planner_cycle,planned_cycle,planned_valid,planned_angle,expired_before,expired,high\n" << std::setprecision(12);
+		plannerTrace.open(
+				std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_planner.csv");
+		plannerTrace << "time_us,angle_deg,cylinder,published_btdc,raw_target,before_state,state,planner_cycle,planned_"
+						"cycle,planned_valid,planned_angle,expired_before,expired,high\n"
+					 << std::setprecision(12);
 	}
+#if HAS_RETARGET
+	std::ofstream decisions(
+			std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_decisions.csv");
+	decisions << "time_us,angle_deg,cylinder,state,tdc_cycle,requested_btdc,applied_btdc,earliest_btdc,latest_btdc,"
+				 "status\n"
+			  << std::setprecision(12);
+	engine->onIgnitionRetarget = [&](int c, float request, float applied, float earliest, float latest, int status) {
+		const auto& e = engine->ignitionEvents.elements[c];
+		const float tdc = engine->cylinders[c].getAngleOffset();
+		decisions << getTimeNowUs() << ',' << phaseAt(getTimeNowUs()) << ',' << c + 1 << ','
+				  << static_cast<int>(e.state) << ','
+				  << static_cast<int>(e.candidateTdcCycle) + static_cast<int>(std::floor(teeth.front().angle / 720))
+				  << ',' << tdc - request << ',' << tdc - applied << ',' << tdc - earliest << ',' << tdc - latest << ','
+				  << status << '\n';
+	};
+#endif
 	bool available = false;
 	int counts[2] = {};
 	int delays[2] = {};
@@ -251,7 +276,14 @@ void runReplay(
 #else
 			  << 0
 #endif
-			  << ',' << predictedConversions << ',' << legacyConversions << '\n';
+			  << ',' << predictedConversions << ',' << legacyConversions
+#if HAS_RETARGET
+			  << ',' << (event.plannedByTime ? tdc - event.requestedSparkAngle : request) << ','
+			  << static_cast<int>(event.retargetStatus)
+#else
+			  << ',' << request << ',' << 0
+#endif
+			  << '\n';
 		if (profile.find("uniform") == 0 && wasCharged) {
 			EXPECT_LT(std::abs(error), 0.061);
 		}
@@ -265,7 +297,11 @@ void runReplay(
 				break;
 			}
 			setTimeNowUs(head->momentX);
-			if (head->action.getCallback() == bit_cast<schfunc_t>(&fireSparkAndPrepareNextSchedule)) {
+			bool firingTimer = false;
+			for (int c = 0; c < 2; c++) {
+				firingTimer |= head == &engine->ignitionEvents.elements[c].sparkEvent.scheduling;
+			}
+			if (firingTimer) {
 				IgnitionContext ctx;
 				ctx._pad = head->action.getArgument();
 				auto& event = engine->ignitionEvents.elements[ctx.eventIndex];
@@ -343,10 +379,12 @@ void runReplay(
 			for (int c = 0; c < 2; c++) {
 				const auto& e = engine->ignitionEvents.elements[c];
 				plannerTrace << time << ',' << teeth[i].angle << ',' << c + 1 << ','
-					<< engine->cylinders[c].getIgnitionTimingBtdc() << ',' << engine->cylinders[c].getSparkAngle(0)
-					<< ',' << beforeState[c] << ',' << static_cast<int>(e.state) << ',' << engine->ignitionEvents.plannerCycle
-					<< ',' << e.plannedTdcCycle << ',' << e.plannedCycleValid << ',' << e.plannedSparkAngle
-					<< ',' << beforeExpired[c] << ',' << e.expiredTargetCount << ',' << enginePins.coils[c].getLogicValue() << '\n';
+							 << engine->cylinders[c].getIgnitionTimingBtdc() << ','
+							 << engine->cylinders[c].getSparkAngle(0) << ',' << beforeState[c] << ','
+							 << static_cast<int>(e.state) << ',' << engine->ignitionEvents.plannerCycle << ','
+							 << e.plannedTdcCycle << ',' << e.plannedCycleValid << ',' << e.plannedSparkAngle << ','
+							 << beforeExpired[c] << ',' << e.expiredTargetCount << ','
+							 << enginePins.coils[c].getLogicValue() << '\n';
 			}
 		}
 	}
@@ -377,6 +415,9 @@ void runReplay(
 		physical << '\n';
 	}
 	engine->onIgnitionEvent = {};
+#if HAS_RETARGET
+	engine->onIgnitionRetarget = {};
+#endif
 #if HAS_CYCLE_PROFILE
 	engine->onIgnitionTiming = {};
 #endif
