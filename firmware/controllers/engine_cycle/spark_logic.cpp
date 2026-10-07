@@ -637,17 +637,11 @@ static bool updateCandidate(IgnitionEvent& event, const EnginePhaseInfo& phase, 
 	const bool changed = std::abs(requested - event.requestedSparkAngle) > .0001f;
 	const bool charging = event.state == IgnitionOccurrenceState::Charging;
 	const float minimum = MSF2NT(.8f * dwellMs);
-	// An active unchanged command needs no ETA/window work or new service
-	// reserve. Pending charge ETA is revised separately below.
-	if (!changed && event.state != IgnitionOccurrenceState::Closed) {
-		return false;
-	}
+	// This path corrects a NEW command. Do not impose a new registration
+	// reserve or change the original admission/minimum-dwell behavior merely
+	// because a tooth changed the estimated time to an unchanged target.
 	if (!changed) {
-		auto oldEta = ignitionEta(phase, previous);
-		if (oldEta &&
-			oldEta.Value >= minimum + ignitionServiceReserveNt + static_cast<float>(getTimeNowNt() - phase.timestamp)) {
-			return false;
-		}
+		return false;
 	}
 	const auto now = getTimeNowNt();
 	float earliestNt = static_cast<float>((now - phase.timestamp)) + ignitionServiceReserveNt;
@@ -868,7 +862,7 @@ void onTriggerEventSparkLogic(const EnginePhaseInfo& phase) {
 					event.candidateValid = false;
 					continue;
 				}
-				updateCandidate(event, phase, dwellMs);
+				const bool corrected = updateCandidate(event, phase, dwellMs);
 				auto eta = ignitionEta(phase, candidateDistance(event, phase));
 				float span = phase.nextEngPhase - phase.currentEngPhase;
 				if (span < 0) {
@@ -890,7 +884,7 @@ void onTriggerEventSparkLogic(const EnginePhaseInfo& phase) {
 				}
 				const float tdc = engine->cylinders[event.cylinderNumber].getAngleOffset();
 				const float elapsed = static_cast<float>(getTimeNowNt() - phase.timestamp);
-				if (eta.Value < elapsed + MSF2NT(.8f * dwellMs) ||
+				if ((corrected && eta.Value < elapsed + MSF2NT(.8f * dwellMs)) ||
 					event.candidateSparkAngle < tdc - engineConfiguration->maximumIgnitionTiming ||
 					event.candidateSparkAngle > tdc - engineConfiguration->minimumIgnitionTiming) {
 					// There is no safe candidate inside the configured timing range.

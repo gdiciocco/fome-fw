@@ -746,9 +746,7 @@ TEST(IgnitionRetarget, FullPrearmChangeAndSpeedRecoveryAreDistinct) {
 		f.command(recovery ? 25 : 40);
 		f.step(0, 10);
 		f.move(recovery ? 4000 : 2000);
-		if (!recovery) {
-			f.command(35);
-		}
+		f.command(recovery ? 20 : 35);
 		f.step(recovery ? 40 : 20, recovery ? 50 : 30);
 		EXPECT_EQ(
 				static_cast<int>(recovery ? IgnitionRetargetStatus::Recovered : IgnitionRetargetStatus::Full),
@@ -885,6 +883,7 @@ TEST(IgnitionRetarget, RecoveryCannotExceedConfiguredMaximumRetard) {
 	f.step(680, 690);
 	ASSERT_TRUE(f.event.candidateValid);
 	f.move(3500);
+	f.command(-5); // A new command cannot authorize ignition past the configured limit.
 	f.step(715, 0);
 	EXPECT_EQ(0u, engine->engineState.sparkCounter);
 	EXPECT_EQ(1u, f.event.expiredTargetCount);
@@ -959,4 +958,24 @@ TEST(IgnitionRetarget, CutRejectsPendingChangeAndKeepsChargedLow) {
 		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
 		EXPECT_EQ(0u, f.event.hardGuardCount);
 	}
+}
+
+TEST(IgnitionRetarget, UnchangedShortBudgetPreservesAdmissionAndPhysicalMinimum) {
+	RetargetFixture f;
+	engine->rpmCalculator.oneDegreeUs = 10;
+	f.command(25);
+	f.step(0, 10);
+	EXPECT_FLOAT_EQ(25, f.event.plannedSparkAngle);
+	EXPECT_EQ(static_cast<int>(IgnitionRetargetStatus::Unchanged), f.event.retargetStatus);
+	f.move(0);
+	ASSERT_TRUE(enginePins.coils[0].getLogicValue());
+	const auto cap = enginePins.coils[0].hardDeadline();
+	f.move(200);
+	f.step(20, 30);
+	f.move(599);
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(cap, enginePins.coils[0].hardDeadline());
+	f.move(1);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(0u, f.event.hardGuardCount);
 }
