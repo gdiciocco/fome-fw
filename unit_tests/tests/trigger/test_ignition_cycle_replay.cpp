@@ -76,6 +76,9 @@ void runReplay(
 		float gain,
 		int fastPhaseUs = 0,
 		float dwellMs = 2.86f) {
+	if (std::getenv("FOME_REPLAY_NARROW") && !(profile == "real1200" && gain > 0 && (phase == 210 || phase == 240))) {
+		return;
+	}
 	const auto teeth = readProfile(profile);
 	ASSERT_GT(teeth.size(), 100u);
 	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
@@ -180,6 +183,11 @@ void runReplay(
 				std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_teeth.csv");
 		toothTrace << "j,time_us,span_deg,observed_next_us,legacy_next_us,raw_next_us,guarded_next_us,valid\n"
 				   << std::setprecision(12);
+	}
+	std::ofstream plannerTrace;
+	if (std::getenv("FOME_REPLAY_TRACE")) {
+		plannerTrace.open(std::string(root) + "/" + std::getenv("FOME_REPLAY_VERSION") + "-replay/" + name + "_planner.csv");
+		plannerTrace << "time_us,angle_deg,cylinder,published_btdc,raw_target,before_state,state,planner_cycle,planned_cycle,planned_valid,planned_angle,expired_before,expired,high\n" << std::setprecision(12);
 	}
 	bool available = false;
 	int counts[2] = {};
@@ -323,8 +331,24 @@ void runReplay(
 					   << '\n';
 		}
 		float rpm = engine->rpmCalculator.getCachedRpm();
+		int beforeState[2] = {};
+		unsigned beforeExpired[2] = {};
+		for (int c = 0; c < 2; c++) {
+			beforeState[c] = static_cast<int>(engine->ignitionEvents.elements[c].state);
+			beforeExpired[c] = engine->ignitionEvents.elements[c].expiredTargetCount;
+		}
 		engine->module<TriggerScheduler>()->onEnginePhase(rpm, info);
 		onTriggerEventSparkLogic(info);
+		if (plannerTrace.is_open()) {
+			for (int c = 0; c < 2; c++) {
+				const auto& e = engine->ignitionEvents.elements[c];
+				plannerTrace << time << ',' << teeth[i].angle << ',' << c + 1 << ','
+					<< engine->cylinders[c].getIgnitionTimingBtdc() << ',' << engine->cylinders[c].getSparkAngle(0)
+					<< ',' << beforeState[c] << ',' << static_cast<int>(e.state) << ',' << engine->ignitionEvents.plannerCycle
+					<< ',' << e.plannedTdcCycle << ',' << e.plannedCycleValid << ',' << e.plannedSparkAngle
+					<< ',' << beforeExpired[c] << ',' << e.expiredTargetCount << ',' << enginePins.coils[c].getLogicValue() << '\n';
+			}
+		}
 	}
 	advanceEvents(teeth.back().time);
 	EXPECT_FALSE(hasFirmwareError());
