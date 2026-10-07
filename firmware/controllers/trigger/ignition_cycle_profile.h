@@ -11,6 +11,8 @@ public:
 	void update(const uint32_t* timestamps, uint16_t index, const EnginePhaseInfo& phase);
 	// At most 180 degrees / 32 references. Uses the existing timestamp ring.
 	expected<float> getTimeToAngleNt(const EnginePhaseInfo& phase, float angleOffset) const;
+	// Inverse of the same causal piecewise-linear horizon; bounded identically.
+	expected<float> getAngleForTimeNt(const EnginePhaseInfo& phase, float ticks) const;
 	expected<float> getDelayNt(const EnginePhaseInfo& phase, float angleOffset) const;
 	uint16_t toothCount() const {
 		return m_slots / 2;

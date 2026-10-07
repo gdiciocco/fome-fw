@@ -188,3 +188,35 @@ expected<float> IgnitionCycleProfile::getTimeToAngleNt(const EnginePhaseInfo& ph
 	}
 	return unexpected;
 }
+
+expected<float> IgnitionCycleProfile::getAngleForTimeNt(const EnginePhaseInfo& phase, float ticks) const {
+	if (!std::isfinite(ticks) || ticks < 0 || !getTimeToAngleNt(phase, 0)) {
+		return unexpected;
+	}
+	float remaining = ticks / m_scale;
+	float angle = 0;
+	auto index = m_index;
+	auto oldTime = m_oldCurrent;
+	for (unsigned count = 0; count < 32; count++) {
+		const auto next = index + 2 == m_slots ? 0 : index + 2;
+		const float span = next ? m_details->eventAngles[next] - m_details->eventAngles[index]
+								: 720.0f - m_details->eventAngles[index];
+		const auto nextTime = m_timestamps[next];
+		const uint32_t duration = nextTime - oldTime;
+		if (!duration || duration > 100000U * US_TO_NT_MULTIPLIER || span <= 0) {
+			return unexpected;
+		}
+		if (remaining <= duration) {
+			const float result = angle + span * remaining / duration;
+			return std::isfinite(result) && result <= 180 ? expected<float>(result) : unexpected;
+		}
+		remaining -= duration;
+		angle += span;
+		if (angle >= 180) {
+			return unexpected;
+		}
+		oldTime = nextTime;
+		index = next;
+	}
+	return unexpected;
+}
