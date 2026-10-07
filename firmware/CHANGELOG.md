@@ -71,6 +71,8 @@ or
  - Instant RPM is now used automatically on triggers with 24 or more teeth per engine cycle (a 12 tooth crank wheel or better), instead of only when "Always use instant RPM" was enabled. RPM, and everything derived from it, now responds within a fraction of an engine cycle instead of once per cycle. The setting remains, and now forces instant RPM on triggers with fewer teeth than that.
 
 ### Fixed
+ - Retain a feasible time-budget ignition candidate for its TDC occurrence when a live advance request moves behind the current tooth. Apply feasible portions of later advance/retard commands before or after charge, within unchanged physical dwell and configured timing bounds; preserve an already registered fire when no new scheduling margin remains.
+ - Invalidate extracted planner firing callbacks independently of occurrence ownership when retargeting. Preserve normal LOW through planner disable/sync flush, and keep multispark generations distinct.
  - Close ignition occurrences atomically and invalidate obsolete charge/fire callbacks, including extracted callbacks from a superseded pending charge estimate. Preserve firing ownership across charge revisions and give multispark pulses distinct occurrence identities.
  - Guard each physical main/trailing ignition output with an immutable 1.5x nominal dwell timer. Repeated HIGH and angle promotion cannot renew its age or cap; stale occurrence cleanup cannot strand a coil HIGH. Raw ignition bench HIGH uses the same cap, and invalid dwell cannot energize an output.
  - Recheck live ignition enable and cut state before pending main/trailing HIGH and additional multispark pulses; existing charges retain their LOW and guard.

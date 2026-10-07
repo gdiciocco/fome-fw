@@ -2,6 +2,7 @@
 #include "trigger_universal.h"
 #include "spark_logic.h"
 #include "defaults.h"
+#include "ignition_retarget.h"
 
 namespace {
 struct ProfileTrace {
@@ -427,13 +428,16 @@ TEST(IgnitionTimeBudget, LiveTargetArmsOncePerTdcOccurrence) {
 	EXPECT_FLOAT_EQ(35, event.plannedSparkAngle);
 	eth.moveTimeForwardAndInvokeEventsUs(500);
 	ASSERT_TRUE(enginePins.coils[0].getLogicValue());
-	// A later tune update does not retarget a latched occurrence or renew guard.
+	// A later tune update may retarget inside the immutable physical guard.
 	engine->cylinders[0].setIgnitionTimingBtdc(-45);
 	const auto deadline = enginePins.coils[0].hardDeadline();
 	onTriggerEventSparkLogic({getTimeNowNt(), 20, 30, 20, 30});
 	EXPECT_EQ(deadline, enginePins.coils[0].hardDeadline());
 	engine->module<TriggerScheduler>()->onEnginePhase(1000, {getTimeNowNt(), 30, 40, 30, 40});
 	eth.moveTimeForwardAndInvokeEventsUs(1000);
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(deadline, enginePins.coils[0].hardDeadline());
+	eth.moveTimeForwardAndInvokeEventsUs(500);
 	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
 	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
 	EXPECT_EQ(1u, engine->engineState.sparkCounter);
@@ -616,7 +620,6 @@ TEST(IgnitionTimeBudget, ExpiredTargetIsCountedAndCannotBeRevivedByRetard) {
 	tc.instantRpm.ignitionProfile.configure(tc.triggerShape, tc.triggerFormDetails);
 	tc.triggerState.setNeedsDisambiguation(true, true);
 	tc.triggerState.syncEnginePhase(2, 0, 720);
-	onTriggerEventSparkLogic({getTimeNowNt(), 0, 10, 0, 10});
 	onTriggerEventSparkLogic({getTimeNowNt(), 40, 50, 40, 50});
 	auto& event = engine->ignitionEvents.elements[0];
 	EXPECT_EQ(1u, event.expiredTargetCount);
@@ -629,4 +632,331 @@ TEST(IgnitionTimeBudget, ExpiredTargetIsCountedAndCannotBeRevivedByRetard) {
 	EXPECT_EQ(1u, engine->engineState.sparkCounter);
 	eth.moveTimeForwardAndInvokeEventsUs(2000);
 	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+}
+
+TEST(IgnitionRetarget, DirectionAndFeasibleWindow) {
+	EXPECT_EQ(IgnitionRetargetStatus::Full, selectIgnitionTarget(20, 15, 10, 30).status);
+	EXPECT_FLOAT_EQ(10, selectIgnitionTarget(20, 5, 10, 30).distance);
+	EXPECT_EQ(IgnitionRetargetStatus::Limited, selectIgnitionTarget(20, 5, 10, 30).status);
+	EXPECT_FLOAT_EQ(30, selectIgnitionTarget(20, 40, 10, 30).distance);
+	EXPECT_EQ(IgnitionRetargetStatus::Rejected, selectIgnitionTarget(10, 5, 10, 30).status);
+	EXPECT_EQ(IgnitionRetargetStatus::Rejected, selectIgnitionTarget(30, 40, 10, 30).status);
+	EXPECT_EQ(IgnitionRetargetStatus::Rejected, selectIgnitionTarget(20, 25, 30, 10).status);
+	EXPECT_EQ(IgnitionRetargetStatus::Recovered, selectIgnitionTarget(5, -2, 10, 30).status);
+	EXPECT_FLOAT_EQ(10, selectIgnitionTarget(5, -2, 10, 30).distance);
+	EXPECT_FLOAT_EQ(5, selectIgnitionTarget(5, 7, 10, 30, true).distance);
+	EXPECT_EQ(IgnitionRetargetStatus::Rejected, selectIgnitionTarget(5, 7, 10, 30, true).status);
+	EXPECT_FLOAT_EQ(15, selectIgnitionTarget(5, 15, 10, 30, true).distance);
+	EXPECT_EQ(IgnitionRetargetStatus::Full, selectIgnitionTarget(5, 15, 10, 30, true).status);
+	EXPECT_FLOAT_EQ(10, selectIgnitionTarget(15, 5, 10, 30, true).distance);
+}
+
+TEST(IgnitionCycleProfile, InverseBudgetMatchesForwardAcrossGapsAndWrap) {
+	EngineTestHelper eth(engine_type_e::TEST_ENGINE);
+	for (int teeth : {36, 60}) {
+		ProfileTrace t(teeth);
+		for (unsigned j = 0; j < 4 * t.predictor.toothCount(); j++) {
+			const float span = t.nextSpan();
+			t.accept();
+			if (j > t.predictor.toothCount() + 3) {
+				for (float distance : {0.0f, 1.0f, 15.0f, 45.0f, 179.0f}) {
+					auto time = t.predictor.getTimeToAngleNt(t.phase, distance);
+					ASSERT_TRUE(time);
+					auto inverse = t.predictor.getAngleForTimeNt(t.phase, time.Value);
+					ASSERT_TRUE(inverse);
+					EXPECT_NEAR(distance, inverse.Value, .0001f);
+				}
+				EXPECT_FALSE(t.predictor.getAngleForTimeNt(t.phase, USF2NT(100000)));
+				auto stale = t.phase;
+				stale.timestamp += US2NT(1);
+				EXPECT_FALSE(t.predictor.getAngleForTimeNt(stale, USF2NT(100)));
+			}
+			t.now += static_cast<int32_t>(USF2NT(span * 100));
+		}
+		t.predictor.reset();
+		EXPECT_FALSE(t.predictor.getAngleForTimeNt(t.phase, 0));
+	}
+}
+
+namespace {
+struct RetargetFixture {
+	EngineTestHelper eth{engine_type_e::TEST_ENGINE};
+	IgnitionEvent& event = engine->ignitionEvents.elements[0];
+	RetargetFixture() {
+		setCylinderCount(1);
+		engineConfiguration->ignitionTimeBudget = true;
+		engineConfiguration->ignitionMode = IM_INDIVIDUAL_COILS;
+		engineConfiguration->minimumIgnitionTiming = -100;
+		engineConfiguration->maximumIgnitionTiming = 100;
+		engine->ignitionState.sparkDwell = 1;
+		engine->ignitionState.dwellAngle = 10;
+		engine->rpmCalculator.oneDegreeUs = 100;
+		auto& tc = engine->triggerCentral;
+		initializeSkippedToothTrigger(&tc.triggerShape, 36, 2, FOUR_STROKE_CRANK_SENSOR, SyncEdge::RiseOnly);
+		for (int i = 0; i < 68; i++) {
+			tc.triggerFormDetails.eventAngles[2 * i] = (i / 34) * 360 + (i % 34) * 10;
+			tc.triggerFormDetails.eventAngles[2 * i + 1] = tc.triggerFormDetails.eventAngles[2 * i];
+		}
+		tc.instantRpm.ignitionProfile.configure(tc.triggerShape, tc.triggerFormDetails);
+		tc.triggerState.setNeedsDisambiguation(true, true);
+		tc.triggerState.syncEnginePhase(2, 0, 720);
+	}
+	void command(float rawTarget) {
+		engine->cylinders[0].setIgnitionTimingBtdc(-rawTarget);
+	}
+	void step(float angle, float next) {
+		const EnginePhaseInfo phase{getTimeNowNt(), {angle}, {next}, {angle}, {next}};
+		engine->module<TriggerScheduler>()->onEnginePhase(1000, phase);
+		onTriggerEventSparkLogic(phase);
+	}
+	void move(int us) {
+		eth.moveTimeForwardAndInvokeEventsUs(us);
+	}
+	void arm() {
+		command(25);
+		step(10, 20);
+	}
+};
+} // namespace
+
+TEST(IgnitionRetarget, RetainedCandidateAppliesPartialAdvanceBeforeArming) {
+	RetargetFixture f;
+	f.command(40);
+	f.step(0, 10);
+	ASSERT_TRUE(f.event.candidateValid);
+	ASSERT_EQ(IgnitionOccurrenceState::Closed, f.event.state);
+	f.move(2000);
+	f.command(15); // passed command; old target40 is still feasible
+	f.step(20, 30);
+	EXPECT_EQ(0u, f.event.expiredTargetCount);
+	EXPECT_EQ(static_cast<int>(IgnitionRetargetStatus::Limited), f.event.retargetStatus);
+	EXPECT_NEAR(29, f.event.plannedSparkAngle, .02);
+	f.move(0);
+	ASSERT_TRUE(enginePins.coils[0].getLogicValue());
+	f.move(950);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	f.command(45);
+	f.step(30, 40);
+	EXPECT_EQ(1u, engine->engineState.sparkCounter);
+}
+
+TEST(IgnitionRetarget, FullPrearmChangeAndSpeedRecoveryAreDistinct) {
+	for (bool recovery : {false, true}) {
+		RetargetFixture f;
+		f.command(recovery ? 25 : 40);
+		f.step(0, 10);
+		f.move(recovery ? 4000 : 2000);
+		if (!recovery) {
+			f.command(35);
+		}
+		f.step(recovery ? 40 : 20, recovery ? 50 : 30);
+		EXPECT_EQ(
+				static_cast<int>(recovery ? IgnitionRetargetStatus::Recovered : IgnitionRetargetStatus::Full),
+				f.event.retargetStatus);
+		EXPECT_NEAR(recovery ? 49 : 35, f.event.plannedSparkAngle, .02);
+		f.move(2000);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	}
+}
+
+TEST(IgnitionRetarget, PendingRetargetInvalidatesExtractedHighAndLow) {
+	RetargetFixture f;
+	f.arm();
+	ASSERT_EQ(IgnitionOccurrenceState::ChargePending, f.event.state);
+	auto high = f.event.dwellStartTimer.action;
+	auto low = f.event.sparkEvent.action;
+	const auto owner = f.event.generation;
+	const auto fireGeneration = f.event.fireGeneration;
+	f.move(200);
+	f.command(28);
+	f.step(12, 22);
+	EXPECT_EQ(owner, f.event.generation);
+	EXPECT_NE(fireGeneration, f.event.fireGeneration);
+	EXPECT_FLOAT_EQ(28, f.event.plannedSparkAngle);
+	high.execute();
+	low.execute();
+	EXPECT_EQ(IgnitionOccurrenceState::ChargePending, f.event.state);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	f.move(600);
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	low.execute();
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	f.move(1500);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+}
+
+TEST(IgnitionRetarget, ChargingAdvanceAndRetardRespectPhysicalWindow) {
+	for (bool retard : {false, true}) {
+		RetargetFixture f;
+		f.arm();
+		auto oldLow = f.event.sparkEvent.action;
+		f.move(500);
+		ASSERT_TRUE(enginePins.coils[0].getLogicValue());
+		const auto deadline = enginePins.coils[0].hardDeadline();
+		const auto high = enginePins.coils[0].firstHigh();
+		f.move(500);
+		f.command(retard ? 40 : 21);
+		f.step(20, 30);
+		EXPECT_EQ(static_cast<int>(IgnitionRetargetStatus::Limited), f.event.retargetStatus);
+		EXPECT_NEAR(retard ? 29 : 23, f.event.plannedSparkAngle, .02);
+		EXPECT_EQ(deadline, enginePins.coils[0].hardDeadline());
+		EXPECT_EQ(high, enginePins.coils[0].firstHigh());
+		oldLow.execute();
+		EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+		f.move(retard ? 850 : 250);
+		EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+		f.move(100);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	}
+}
+
+TEST(IgnitionRetarget, RegisteredNearFireNeedsNoNewServiceReserve) {
+	for (bool change : {false, true}) {
+		RetargetFixture f;
+		f.arm();
+		f.move(1000);
+		f.step(20, 30);
+		const auto action = f.event.sparkEvent.scheduling.action;
+		const auto when = f.event.sparkEvent.scheduling.momentX;
+		const auto generation = f.event.fireGeneration;
+		f.move(450);
+		if (change) {
+			f.command(25.2f);
+		}
+		f.step(24.5f, 30);
+		EXPECT_EQ(when, f.event.sparkEvent.scheduling.momentX);
+		EXPECT_EQ(generation, f.event.fireGeneration);
+		EXPECT_EQ(action.getArgument(), f.event.sparkEvent.scheduling.action.getArgument());
+		EXPECT_FLOAT_EQ(25, f.event.plannedSparkAngle);
+		if (change) {
+			EXPECT_EQ(static_cast<int>(IgnitionRetargetStatus::Rejected), f.event.retargetStatus);
+		}
+		f.move(50);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	}
+}
+
+TEST(IgnitionRetarget, NormalLowSurvivesFlushAndLossOfPlannerSupport) {
+	for (int mode : {0, 1, 2}) {
+		RetargetFixture f;
+		f.arm();
+		f.move(1000);
+		f.step(20, 30);
+		const auto when = f.event.sparkEvent.scheduling.momentX;
+		if (mode == 0) {
+			engine->module<TriggerScheduler>()->flush();
+		}
+		if (mode == 1) {
+			engineConfiguration->ignitionTimeBudget = false;
+			f.step(21, 30);
+		}
+		if (mode == 2) {
+			engine->OnTriggerSynchronizationLost();
+		}
+		EXPECT_EQ(when, f.event.sparkEvent.scheduling.momentX);
+		f.move(500);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+		EXPECT_EQ(0u, f.event.hardGuardCount);
+	}
+}
+
+TEST(IgnitionRetarget, WrappedTdcCandidateCannotBeRevivedAfterFire) {
+	RetargetFixture f;
+	f.command(-20);
+	f.step(660, 670);
+	ASSERT_TRUE(f.event.candidateValid);
+	EXPECT_EQ(1u, f.event.candidateTdcCycle);
+	f.move(2000);
+	f.command(-45);
+	f.step(680, 690);
+	EXPECT_EQ(1u, f.event.plannedTdcCycle);
+	EXPECT_NEAR(689, f.event.plannedSparkAngle, .02);
+	f.move(1000);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	f.command(5);
+	f.step(0, 10);
+	EXPECT_EQ(1u, engine->engineState.sparkCounter);
+}
+
+TEST(IgnitionRetarget, RecoveryCannotExceedConfiguredMaximumRetard) {
+	RetargetFixture f;
+	engineConfiguration->minimumIgnitionTiming = 0;
+	f.command(-10);
+	f.step(680, 690);
+	ASSERT_TRUE(f.event.candidateValid);
+	f.move(3500);
+	f.step(715, 0);
+	EXPECT_EQ(0u, engine->engineState.sparkCounter);
+	EXPECT_EQ(1u, f.event.expiredTargetCount);
+	EXPECT_FALSE(f.event.candidateValid);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+	f.command(0);
+	f.step(716, 0);
+	EXPECT_EQ(0u, engine->engineState.sparkCounter);
+}
+
+TEST(IgnitionRetarget, BothSameTickOrdersRemainOneOccurrence) {
+	for (bool retargetFirst : {false, true}) {
+		RetargetFixture f;
+		f.arm();
+		f.move(1000);
+		f.step(20, 30);
+		auto oldLow = f.event.sparkEvent.scheduling.action;
+		if (retargetFirst) {
+			setTimeNowUs(getTimeNowUs() + 500);
+		} else {
+			f.move(500);
+		}
+		f.command(28);
+		f.step(25, 35);
+		oldLow.execute();
+		EXPECT_EQ(retargetFirst, enginePins.coils[0].getLogicValue());
+		f.move(500);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+		EXPECT_EQ(1u, engine->engineState.sparkCounter);
+	}
+}
+
+TEST(IgnitionRetarget, FireTokenWrapAndOldMainCallbackCannotFireMultispark) {
+	RetargetFixture f;
+	f.event.fireGeneration = 0x7ffffffe;
+	engine->engineState.multispark.count = 1;
+	engine->engineState.multispark.dwell = US2NT(500);
+	engine->engineState.multispark.delay = US2NT(250);
+	f.arm();
+	EXPECT_EQ(0x7ffffffu, f.event.fireGeneration);
+	auto oldLow = f.event.sparkEvent.action;
+	f.move(200);
+	f.command(28);
+	f.step(12, 22);
+	EXPECT_EQ(1u, f.event.fireGeneration);
+	f.move(1200);
+	f.step(24, 34);
+	auto mainLow = f.event.sparkEvent.scheduling.action;
+	f.move(650); // main fire1800, multispark HIGH2050
+	ASSERT_TRUE(enginePins.coils[0].getLogicValue());
+	EXPECT_EQ(2u, f.event.fireGeneration);
+	oldLow.execute();
+	mainLow.execute();
+	EXPECT_TRUE(enginePins.coils[0].getLogicValue());
+	f.move(500);
+	EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+}
+
+TEST(IgnitionRetarget, CutRejectsPendingChangeAndKeepsChargedLow) {
+	for (bool charging : {false, true}) {
+		RetargetFixture f;
+		f.arm();
+		f.move(charging ? 1000 : 200);
+		if (charging) {
+			f.step(20, 30);
+		}
+		engineConfiguration->isIgnitionEnabled = false;
+		f.command(28);
+		f.step(charging ? 21 : 12, 30);
+		EXPECT_EQ(charging, enginePins.coils[0].getLogicValue());
+		f.move(2000);
+		EXPECT_FALSE(enginePins.coils[0].getLogicValue());
+		EXPECT_EQ(0u, f.event.hardGuardCount);
+	}
 }

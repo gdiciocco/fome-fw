@@ -1,5 +1,9 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+
 enum class IgnitionRetargetStatus : uint8_t {
 	Unchanged,
 	Full,
@@ -15,9 +19,10 @@ struct IgnitionTargetDecision {
 
 // All distances refer to the SAME TDC occurrence, without wrapping a passed
 // request into the next cycle. Bounds are derived from the causal time model.
-inline IgnitionTargetDecision selectIgnitionTarget(float previous, float requested, float earliest, float latest, bool alreadyArmed = false) {
-	if (!std::isfinite(previous) || !std::isfinite(requested) || !std::isfinite(earliest) ||
-		!std::isfinite(latest) || earliest > latest) {
+inline IgnitionTargetDecision
+selectIgnitionTarget(float previous, float requested, float earliest, float latest, bool alreadyArmed = false) {
+	if (!std::isfinite(previous) || !std::isfinite(requested) || !std::isfinite(earliest) || !std::isfinite(latest) ||
+		earliest > latest) {
 		return {previous, IgnitionRetargetStatus::Rejected};
 	}
 	const float applied = std::clamp(requested, earliest, latest);

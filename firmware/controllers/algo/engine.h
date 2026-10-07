@@ -301,6 +301,7 @@ public:
 	std::function<void()> onAirmassCalibrationScanned;
 	std::function<void()> onCylinderFuelPrepared;
 	std::function<void(bool)> onIgnitionTiming; // Observes final conversion only, absent from firmware.
+	std::function<void(int, float, float, float, float, int)> onIgnitionRetarget;
 #endif // EFI_UNIT_TEST
 
 #if EFI_ENGINE_CONTROL
