@@ -181,8 +181,8 @@ bool StepDirectionStepper::pulse() {
 	m_stepPin.setValue(false);
 	pause();
 
-	m_enablePin.setValue(true); // disable stepper
-
+	// Keep the driver enabled between steps and while holding the target position.
+	// The main relay removes motor power when the ECU shuts down.
 	return true;
 }
 

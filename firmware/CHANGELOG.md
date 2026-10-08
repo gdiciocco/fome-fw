@@ -32,6 +32,9 @@ or
 
 ## Unreleased
 
+### Changed
+ - STEP/DIR idle stepper drivers remain enabled after each step, including while holding the target position. Motor power is still removed by the main relay at shutdown.
+
 ### Breaking Changes
  - Shock preload now uses secondary CAN (CAN2/Bus1) instead of primary CAN. Move the controller wiring to CAN2; status polling is now 1 Hz.
  - The calibration format includes separate airmass maps and independent load selectors. Back up the project, MSQ and matching INI before updating; restore axes, cells and controls manually with the new definition. Existing binary tunes are not migrated.
